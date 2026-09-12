@@ -1,0 +1,55 @@
+name: Diagnose Pages AI binding
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    if: contains(github.event.head_commit.message, '[diag-ai-binding]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect Pages Workers AI binding state
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          token="$(printf '%s' "$CLOUDFLARE_API_TOKEN" | tr -d '\r\n')"
+          acct="$(printf '%s' "$CLOUDFLARE_ACCOUNT_ID" | tr -d '[:space:]')"
+          api='https://api.cloudflare.com/client/v4'
+          project="$RUNNER_TEMP/project.json"
+          code="$(curl -sS -o "$project" -w '%{http_code}' -H "Authorization: Bearer $token" "$api/accounts/$acct/pages/projects/lovelycoffeehouse")"
+          echo "project_http=$code"
+          PROJECT="$(cat "$project")" node - <<'NODE'
+          const p=JSON.parse(process.env.PROJECT||'{}');
+          console.log('success='+(p.success===true));
+          const r=p.result||{};
+          for(const envName of ['production','preview']){
+            const cfg=r.deployment_configs?.[envName]||{};
+            const ai=cfg.ai_bindings||{};
+            console.log(`${envName}_ai_binding_names=${Object.keys(ai).join(',')||'none'}`);
+            for(const [name,v] of Object.entries(ai)) console.log(`${envName}_ai_${name}_project_id=${v?.project_id||'none'}`);
+            console.log(`${envName}_compatibility_date=${cfg.compatibility_date||'none'}`);
+          }
+          console.log('latest_deployment_id='+(r.latest_deployment?.id||'none'));
+          console.log('latest_deployment_environment='+(r.latest_deployment?.environment||'none'));
+          NODE
+
+      - name: Inspect downloaded Wrangler AI sections
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          CLOUDFLARE_API_TOKEN="$(printf '%s' "$CLOUDFLARE_API_TOKEN" | tr -d '\r\n')"
+          CLOUDFLARE_ACCOUNT_ID="$(printf '%s' "$CLOUDFLARE_ACCOUNT_ID" | tr -d '[:space:]')"
+          export CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
+          npx --yes wrangler@4.131.0 pages download config lovelycoffeehouse --force >/dev/null
+          echo '--- wrangler AI sections ---'
+          grep -n -A3 -B1 -E '^\[.*ai.*\]$|^ai\s*=|binding\s*=\s*"AI"' wrangler.toml || true
