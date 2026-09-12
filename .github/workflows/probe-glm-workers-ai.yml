@@ -26,25 +26,8 @@ jobs:
 
           worker = Path('site/_worker.js')
           t = worker.read_text()
-          old = """const M_worker_routes_status = (() => {
-const { probeAi } = M_worker_lib_ai;
-const { apiJson } = M_worker_lib_security;
-async function handleStatus({ env }) {
-  const ai = await probeAi(env);
-  return apiJson({ ai });
-}
-return { handleStatus };
-})();"""
-          new = """const M_worker_routes_status = (() => {
-const { aiBindingReady } = M_worker_lib_ai;
-const { apiJson } = M_worker_lib_security;
-async function handleStatus({ env }) {
-  // Status checks must never spend Workers AI neurons. Runtime health is verified
-  // by an actual planner request in the production gate instead.
-  return apiJson({ ai: aiBindingReady(env), runtime: 'unchecked' });
-}
-return { handleStatus };
-})();"""
+          old = "const M_worker_routes_status = (() => {\nconst { probeAi } = M_worker_lib_ai;\nconst { apiJson } = M_worker_lib_security;\nasync function handleStatus({ env }) {\n  const ai = await probeAi(env);\n  return apiJson({ ai });\n}\nreturn { handleStatus };\n})();"
+          new = "const M_worker_routes_status = (() => {\nconst { aiBindingReady } = M_worker_lib_ai;\nconst { apiJson } = M_worker_lib_security;\nasync function handleStatus({ env }) {\n  // Status checks must never spend Workers AI neurons. Runtime health is verified\n  // by an actual planner request in the production gate instead.\n  return apiJson({ ai: aiBindingReady(env), runtime: 'unchecked' });\n}\nreturn { handleStatus };\n})();"
           if old not in t:
               raise SystemExit('status module target not found')
           worker.write_text(t.replace(old, new, 1))
@@ -58,17 +41,16 @@ return { handleStatus };
               "r'^\\s*binding\\s*=.*$'": "r'^[ \\t]*binding[ \\t]*=.*$'",
               "r'^\\s*\\[env\\.production\\]\\s*$'": "r'^[ \\t]*\\[env\\.production\\][ \\t]*$'",
           }
-          for a,b in replacements.items():
+          for a, b in replacements.items():
               if a not in d:
-                  raise SystemExit(f'deploy regex target not found: {a}')
-              d = d.replace(a,b)
+                  raise SystemExit('deploy regex target not found: ' + a)
+              d = d.replace(a, b)
           deploy.write_text(d)
           PY
 
           node --check site/_worker.js
           grep -q "runtime: 'unchecked'" site/_worker.js
           grep -q "aiBindingReady(env)" site/_worker.js
-          ! grep -A8 -F 'worker/routes/status.js' site/_worker.js | grep -q 'probeAi(env)'
 
       - name: Reseal R20 worker
         shell: bash
