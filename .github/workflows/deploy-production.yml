@@ -48,7 +48,7 @@ jobs:
           console.log(`Production candidate verified: ${info.build}`);
           NODE
 
-      - name: Validate Cloudflare credentials and Pages target
+      - name: Validate exact Cloudflare Pages target
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -56,74 +56,41 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "${CLOUDFLARE_API_TOKEN:-}" ] || { echo '::error::Missing GitHub Actions secret CLOUDFLARE_API_TOKEN'; exit 1; }
-
-          # Normalize copy/paste whitespace only. Never infer or mutate credential data.
+          [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || { echo '::error::Missing GitHub Actions secret CLOUDFLARE_ACCOUNT_ID'; exit 1; }
           CLOUDFLARE_API_TOKEN="$(printf '%s' "$CLOUDFLARE_API_TOKEN" | tr -d '\r\n')"
-          CLOUDFLARE_ACCOUNT_ID="$(printf '%s' "${CLOUDFLARE_ACCOUNT_ID:-}" | tr -d '[:space:]')"
+          CLOUDFLARE_ACCOUNT_ID="$(printf '%s' "$CLOUDFLARE_ACCOUNT_ID" | tr -d '[:space:]')"
           export CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
+          [[ "$CLOUDFLARE_ACCOUNT_ID" =~ ^[A-Za-z0-9_-]{32}$ ]] || { echo '::error::Cloudflare Account ID must be the 32-character Account ID from the account containing the Pages project'; exit 1; }
 
-          [ -n "$CLOUDFLARE_API_TOKEN" ] || { echo '::error::Cloudflare API token is empty after whitespace normalization'; exit 1; }
-          if [ -n "$CLOUDFLARE_ACCOUNT_ID" ] && [[ ! "$CLOUDFLARE_ACCOUNT_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
-            echo '::error::Cloudflare Account ID contains invalid characters.'
+          body="$RUNNER_TEMP/cloudflare-project.json"
+          status="$(curl --silent --show-error --output "$body" --write-out '%{http_code}' \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$CLOUDFLARE_PROJECT")"
+
+          if [ "$status" != '200' ]; then
+            echo "::error::Cloudflare exact-project lookup failed with HTTP $status"
+            PROJECT_JSON="$(cat "$body")" node - <<'NODE'
+          const payload = JSON.parse(process.env.PROJECT_JSON || '{}');
+          const errors = Array.isArray(payload.errors) ? payload.errors : [];
+          for (const e of errors) console.error(`Cloudflare error ${e?.code ?? 'unknown'}: ${e?.message ?? 'unknown'}`);
+          NODE
             exit 1
           fi
 
-          node --version
-          npx --yes "wrangler@${WRANGLER_VERSION}" --version
-
-          projects_file="$RUNNER_TEMP/pages-projects.json"
-          account_mode='configured'
-
-          # First honor the configured account ID. If that account does not expose the
-          # production project, retry with the account ID unset. Wrangler 4 can safely
-          # auto-select when this scoped token can access exactly one Cloudflare account.
-          configured_ok=false
-          if [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
-            if npx --yes "wrangler@${WRANGLER_VERSION}" pages project list --json > "$projects_file" 2>"$RUNNER_TEMP/pages-configured.err"; then
-              if PROJECTS_JSON="$(cat "$projects_file")" node - <<'NODE'
-          const projects = JSON.parse(process.env.PROJECTS_JSON || '[]');
-          if (!Array.isArray(projects) || !projects.some(p => p?.name === process.env.CLOUDFLARE_PROJECT)) process.exit(1);
-          NODE
-              then
-                configured_ok=true
-              fi
-            fi
-          fi
-
-          if [ "$configured_ok" != true ]; then
-            account_mode='auto'
-            echo 'Configured Account ID does not expose the sealed Pages target; trying token-scoped account auto-resolution.'
-            unset CLOUDFLARE_ACCOUNT_ID
-            if ! npx --yes "wrangler@${WRANGLER_VERSION}" pages project list --json > "$projects_file" 2>"$RUNNER_TEMP/pages-auto.err"; then
-              echo '::error::Cloudflare account auto-resolution failed. The saved Account ID likely belongs to a different account, and the token could not auto-select a single account.'
-              cat "$RUNNER_TEMP/pages-auto.err" >&2 || true
-              exit 1
-            fi
-          fi
-
-          PROJECTS_JSON="$(cat "$projects_file")" node - <<'NODE'
-          const projects = JSON.parse(process.env.PROJECTS_JSON || '[]');
-          if (!Array.isArray(projects)) throw new Error('Wrangler did not return a Pages project array');
-          const expected = process.env.CLOUDFLARE_PROJECT;
-          const names = projects.map(p => p?.name).filter(Boolean);
-          if (!names.includes(expected)) {
-            console.error(`Expected Pages project '${expected}' is not visible to this token/account.`);
-            console.error(`Accessible Pages projects (${names.length}): ${names.length ? names.join(', ') : '(none)'}`);
-            process.exit(1);
+          PROJECT_JSON="$(cat "$body")" node - <<'NODE'
+          const payload = JSON.parse(process.env.PROJECT_JSON || '{}');
+          if (payload.success !== true || payload.result?.name !== process.env.CLOUDFLARE_PROJECT) {
+            throw new Error(`Exact Cloudflare Pages target mismatch: ${JSON.stringify({success: payload.success, name: payload.result?.name})}`);
           }
-          console.log(`Cloudflare Pages target qualified: ${expected}`);
+          console.log(`Cloudflare Pages target qualified exactly: ${payload.result.name}`);
           NODE
 
-          # Persist only validated values. In auto mode leave Account ID unset so
-          # Wrangler continues using the same token-scoped account selection.
           {
             printf 'CLOUDFLARE_API_TOKEN=%s\n' "$CLOUDFLARE_API_TOKEN"
-            printf 'CLOUDFLARE_PROJECT=%s\n' "$CLOUDFLARE_PROJECT"
-            if [ "$account_mode" = configured ]; then
-              printf 'CLOUDFLARE_ACCOUNT_ID=%s\n' "$CLOUDFLARE_ACCOUNT_ID"
-            fi
+            printf 'CLOUDFLARE_ACCOUNT_ID=%s\n' "$CLOUDFLARE_ACCOUNT_ID"
           } >> "$GITHUB_ENV"
-          echo "Cloudflare credential mode: $account_mode"
+
+          npx --yes "wrangler@${WRANGLER_VERSION}" --version
 
       - name: Deploy exact R17 source to Cloudflare Pages production
         id: deploy
@@ -131,7 +98,6 @@ jobs:
         run: |
           set -euo pipefail
           log="$RUNNER_TEMP/wrangler-deploy.log"
-          # For Pages Direct Upload, omitting --branch targets the project's production environment.
           npx --yes "wrangler@${WRANGLER_VERSION}" pages deploy site \
             --project-name="$CLOUDFLARE_PROJECT" \
             --commit-hash="$GITHUB_SHA" \
@@ -149,7 +115,6 @@ jobs:
           set -euo pipefail
           tmp="$RUNNER_TEMP/lovely-production-smoke"
           mkdir -p "$tmp"
-
           curl --fail --silent --show-error --location --retry 5 --retry-delay 2 "$DEPLOYMENT_URL/build-info.json" -o "$tmp/build-info.json"
           printf '%s  %s\n' 'f6bad5f1b54780a7d1ac9bb77ddd6215d0431ccc3fe0527f77bf5d630b4ad32a' "$tmp/build-info.json" | sha256sum -c -
           curl --fail --silent --show-error --location --retry 5 --retry-delay 2 "$DEPLOYMENT_URL/sw.js" -o "$tmp/sw.js"
@@ -157,11 +122,7 @@ jobs:
           curl --fail --silent --show-error --location --retry 5 --retry-delay 2 "$DEPLOYMENT_URL/assets/lovely-ai.8f169dbb9daf.js" -o "$tmp/lovely-ai.js"
           printf '%s  %s\n' '8f169dbb9daf4c87badf614108443e71e2dc8732c684540b0a164723c8ff853c' "$tmp/lovely-ai.js" | sha256sum -c -
 
-          status_json=''
-          for attempt in 1 2 3; do
-            if status_json="$(curl --fail --silent --show-error --retry 2 --retry-delay 2 "$DEPLOYMENT_URL/api/lovely-status")"; then break; fi
-            sleep 2
-          done
+          status_json="$(curl --fail --silent --show-error --retry 3 --retry-delay 2 "$DEPLOYMENT_URL/api/lovely-status")"
           STATUS_JSON="$status_json" node - <<'NODE'
           const payload = JSON.parse(process.env.STATUS_JSON || '{}');
           if (payload.ai !== true) throw new Error(`Workers AI is not ready: ${JSON.stringify(payload)}`);
@@ -169,11 +130,7 @@ jobs:
           NODE
 
           planner_payload='{"question":"add one cappuccino","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
-          planner_json=''
-          for attempt in 1 2 3; do
-            if planner_json="$(curl --fail --silent --show-error -H "Origin: $DEPLOYMENT_URL" -H 'Content-Type: application/json' -H 'X-Lovely-Client: githubproduction1' --data "$planner_payload" "$DEPLOYMENT_URL/api/lovely-actions")"; then break; fi
-            sleep 2
-          done
+          planner_json="$(curl --fail --silent --show-error --retry 3 --retry-delay 2 -H "Origin: $DEPLOYMENT_URL" -H 'Content-Type: application/json' -H 'X-Lovely-Client: githubproduction1' --data "$planner_payload" "$DEPLOYMENT_URL/api/lovely-actions")"
           PLANNER_JSON="$planner_json" node - <<'NODE'
           const payload = JSON.parse(process.env.PLANNER_JSON || '{}');
           if (payload.handled !== true || !Array.isArray(payload.actions) || payload.actions.length < 1 || payload.actions[0]?.type !== 'ADD_ITEM') {
