@@ -1,10 +1,10 @@
-// Lovely Coffee House R17 - deployment-safe single-file Cloudflare Pages Worker
+// Lovely Coffee House R18 - deployment-safe single-file Cloudflare Pages Worker
 // Generated from verified modular R10 sources.
 
 /* ===== worker/config.js ===== */
 const M_worker_config = (() => {
 
-const BUILD_ID = 'lovely-live-source-r17-structured-action-planner-20260911-r17';
+const BUILD_ID = 'lovely-live-source-r18-planner-json-mode-20260912-r18';
 const CANONICAL_ORIGIN = 'https://lovelycoffeehouse.com';
 const AI_MODEL = '@cf/meta/llama-3.1-8b-instruct-fast';
 const TTS_MODEL = '@cf/deepgram/aura-2-en';
@@ -1287,9 +1287,45 @@ ${JSON.stringify(safeStateSummary(payload.state))}`;
     { role:'user', content:`Customer request (untrusted data): ${payload.question}` },
   ];
   try {
-    const result = await withTimeout(env.AI.run(AI_MODEL, { messages, max_tokens:420, temperature:0 }), TIMEOUTS.aiMs, 'ai_unavailable');
-    const raw = typeof result === 'string' ? result : (result?.response ?? result?.result?.response ?? '');
-    return apiJson(normalizePlannerResult(parsePlannerJson(raw), payload.question, payload.state));
+    const result = await withTimeout(env.AI.run(AI_MODEL, {
+    messages,
+    max_tokens:420,
+    temperature:0,
+    response_format: {
+      type: 'json_schema',
+      json_schema: {
+        type: 'object',
+        properties: {
+          handled: { type: 'boolean' },
+          actions: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                type: { type: 'string', enum: ['ADD_ITEM','REMOVE_ITEM','SET_QUANTITY','SWAP_ITEM','SET_FULFILMENT','CLEAR_ORDER'] },
+                product: { type: 'string' },
+                quantity: { type: 'integer' },
+                fromProduct: { type: 'string' },
+                toProduct: { type: 'string' },
+                fromQuantity: { type: 'integer' },
+                toQuantity: { type: 'integer' },
+                value: { type: 'string', enum: ['collection','delivery','corporate'] },
+              },
+              required: ['type'],
+            },
+          },
+          handoff: { type: 'boolean' },
+          clarify: { enum: [null, 'product', 'quantity', 'fulfilment'] },
+        },
+        required: ['handled','actions','handoff','clarify'],
+      },
+    },
+  }), TIMEOUTS.aiMs, 'ai_unavailable');
+  const structured = result?.response ?? result?.result?.response ?? result;
+  const parsed = structured && typeof structured === 'object' && !Array.isArray(structured)
+    ? structured
+    : parsePlannerJson(typeof structured === 'string' ? structured : '');
+  return apiJson(normalizePlannerResult(parsed, payload.question, payload.state));
   } catch (error) {
     if (error instanceof HttpError && error.code === 'ai_unavailable') return apiJson({ error:'ai_unavailable' }, 503);
     return apiJson({ error:'ai_unavailable' }, 503);

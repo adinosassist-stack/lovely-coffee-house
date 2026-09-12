@@ -4,11 +4,11 @@ Production source repository for [lovelycoffeehouse.com](https://lovelycoffeehou
 
 ## Current production candidate
 
-- Release: **R17 — Structured Action AI**
-- Build: `lovely-live-source-r17-structured-action-planner-20260911-r17`
+- Release: **R18 — Planner JSON Hardening**
+- Build: `lovely-live-source-r18-planner-json-mode-20260912-r18`
 - Cloudflare Pages project: `lovelycoffeehouse`
-- Deployment source: sealed R17 native deploy kit
-- Runtime ZIP SHA-256: `59c3618e5488959abf0886e4bfcd7900f2e443fe71a00e0e36598a23223b1036`
-- Native deploy kit SHA-256: `5c0374120fa68c5fa9cb0e00c91e0aa2df3eb409badf4921858e68920539f8a2`
+- Sealed site manifest: `release/r18-site.sha256` (50 files)
+- Rollback manifest retained: `release/r17-site.sha256`
+- Workers AI binding: `AI`
 
-The deployment workflow must verify the sealed ZIP checksum before any Cloudflare command runs. Do not deploy reconstructed or older packages over the live site.
+R18 preserves the R17 deterministic commerce validation layer and hardens the structured action planner with Cloudflare Workers AI JSON-schema output. Production deployment is guarded by exact source checksums, runtime AI checks, planner smoke tests, and custom-domain build verification.

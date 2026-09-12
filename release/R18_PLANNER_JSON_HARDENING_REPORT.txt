@@ -1,0 +1,16 @@
+Lovely Coffee House R18 — Planner JSON Hardening
+
+Build: lovely-live-source-r18-planner-json-mode-20260912-r18
+
+Root cause isolated in production:
+- Workers AI binding: READY
+- Generic /api/lovely-ai: HTTP 200
+- R17 /api/lovely-actions: HTTP 503
+- Therefore the failure was isolated to structured planner output parsing/normalization rather than Cloudflare authentication or the AI binding.
+
+R18 changes:
+- Uses Cloudflare Workers AI JSON Schema response_format for /api/lovely-actions.
+- Accepts Cloudflare JSON Mode structured response objects directly, while retaining guarded string parsing compatibility.
+- Preserves deterministic catalog, grounding, quantity, fulfilment and handoff validation before any browser cart mutation.
+- Bumps build identity and service-worker cache generation.
+- Retains R17 manifest for rollback.

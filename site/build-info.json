@@ -1,6 +1,6 @@
 {
-  "build": "lovely-live-source-r17-structured-action-planner-20260911-r17",
-  "source": "Lovely Coffee House R16 + R17 structured AI action planner with deterministic server validation and client action execution",
+  "build": "lovely-live-source-r18-planner-json-mode-20260912-r18",
+  "source": "Lovely Coffee House R17 + R18 Workers AI JSON-schema planner hardening with deterministic server validation and client action execution",
   "frontend": {
     "css": "app.5ed8a120fc5b.css",
     "order": "home-order.316103234499.js",
@@ -10,9 +10,9 @@
     "rooms_ai": "lovely-rooms-ai.57af084298ec.js"
   },
   "backend": "Cloudflare Pages Advanced Mode / Workers AI modular routes",
-  "sw_version": "2026-09-11-r17-structured-actions",
+  "sw_version": "2026-09-12-r18-planner-json",
   "vat_enabled": false,
   "ai_binding": "AI",
-  "artifact": "Lovely_Coffee_House_R17_STRUCTURED_ACTION_AI_SAFE_RUNTIME.zip",
+  "artifact": "release/r18-site.sha256",
   "deploymentForm": "single-file-worker-direct-upload"
 }
