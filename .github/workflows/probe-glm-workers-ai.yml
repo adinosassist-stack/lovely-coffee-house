@@ -1,93 +1,102 @@
-name: Probe live Workers AI error
+name: Apply Workers AI quota hardening
 
 on:
   push:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  probe-ai-error:
-    if: contains(github.event.head_commit.message, '[probe-ai-error]')
+  quota-hardening:
+    if: contains(github.event.head_commit.message, '[quota-hardening]')
     runs-on: ubuntu-latest
-    env:
-      CLOUDFLARE_PROJECT: lovelycoffeehouse
-      WRANGLER_VERSION: 4.131.0
     steps:
-      - name: Checkout
+      - name: Checkout main
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
 
-      - name: Prepare production Pages config
-        shell: bash
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          set -euo pipefail
-          CLOUDFLARE_API_TOKEN="$(printf '%s' "$CLOUDFLARE_API_TOKEN" | tr -d '\r\n')"
-          CLOUDFLARE_ACCOUNT_ID="$(printf '%s' "$CLOUDFLARE_ACCOUNT_ID" | tr -d '[:space:]')"
-          export CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
-          rm -f wrangler.toml wrangler.json wrangler.jsonc
-          npx --yes "wrangler@${WRANGLER_VERSION}" pages download config "$CLOUDFLARE_PROJECT" --force
-          printf '\n[ai]\nbinding = "AI"\n' >> wrangler.toml
-          grep -q '^\[env\.production\.ai\]$' wrangler.toml
-          grep -q '^\[ai\]$' wrangler.toml
-
-      - name: Patch status endpoint to expose sanitized AI runtime error
+      - name: Patch status probe and production config handling
         shell: bash
         run: |
           set -euo pipefail
-          cp site/_worker.js "$RUNNER_TEMP/original-worker.js"
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('site/_worker.js')
-          t = p.read_text()
-          old = "async function handleStatus({ env }) {\n  const ai = await probeAi(env);\n  return apiJson({ ai });\n}"
-          new = "async function handleStatus({ env }) {\n  const binding = Boolean(env && env.AI && typeof env.AI.run === 'function');\n  if (!binding) return apiJson({ ai:false, binding:false, reason:'binding_missing' });\n  try {\n    const result = await env.AI.run('@cf/meta/llama-3.1-8b-instruct-fast', { messages: [{ role:'user', content:'Reply OK.' }], max_tokens: 2, temperature: 0 });\n    return apiJson({ ai:Boolean(result), binding:true, reason:result ? 'ok' : 'empty_result' });\n  } catch (error) {\n    const code = String((error && (error.code || error.status)) || '').slice(0,40);\n    const message = String((error && error.message) || (error && error.name) || 'runtime_error').replace(/[\\r\\n]+/g,' ').slice(0,220);\n    return apiJson({ ai:false, binding:true, reason:'runtime_error', code, message });\n  }\n}"
+
+          worker = Path('site/_worker.js')
+          t = worker.read_text()
+          old = """const M_worker_routes_status = (() => {
+const { probeAi } = M_worker_lib_ai;
+const { apiJson } = M_worker_lib_security;
+async function handleStatus({ env }) {
+  const ai = await probeAi(env);
+  return apiJson({ ai });
+}
+return { handleStatus };
+})();"""
+          new = """const M_worker_routes_status = (() => {
+const { aiBindingReady } = M_worker_lib_ai;
+const { apiJson } = M_worker_lib_security;
+async function handleStatus({ env }) {
+  // Status checks must never spend Workers AI neurons. Runtime health is verified
+  // by an actual planner request in the production gate instead.
+  return apiJson({ ai: aiBindingReady(env), runtime: 'unchecked' });
+}
+return { handleStatus };
+})();"""
           if old not in t:
-              raise SystemExit('handleStatus target not found')
-          p.write_text(t.replace(old, new, 1))
+              raise SystemExit('status module target not found')
+          worker.write_text(t.replace(old, new, 1))
+
+          deploy = Path('.github/workflows/deploy-production.yml')
+          d = deploy.read_text()
+          replacements = {
+              "r'^\\s*pages_build_output_dir\\s*=.*$'": "r'^[ \\t]*pages_build_output_dir[ \\t]*=.*$'",
+              "rf'^\\s*\\[{re.escape(table)}\\]\\s*$'": "rf'^[ \\t]*\\[{re.escape(table)}\\][ \\t]*$'",
+              "r'^\\s*\\[[^\\]]+\\]\\s*$'": "r'^[ \\t]*\\[[^\\]]+\\][ \\t]*$'",
+              "r'^\\s*binding\\s*=.*$'": "r'^[ \\t]*binding[ \\t]*=.*$'",
+              "r'^\\s*\\[env\\.production\\]\\s*$'": "r'^[ \\t]*\\[env\\.production\\][ \\t]*$'",
+          }
+          for a,b in replacements.items():
+              if a not in d:
+                  raise SystemExit(f'deploy regex target not found: {a}')
+              d = d.replace(a,b)
+          deploy.write_text(d)
           PY
+
           node --check site/_worker.js
+          grep -q "runtime: 'unchecked'" site/_worker.js
+          grep -q "aiBindingReady(env)" site/_worker.js
+          ! grep -A8 -F 'worker/routes/status.js' site/_worker.js | grep -q 'probeAi(env)'
 
-      - name: Deploy diagnostic status endpoint to production branch
-        shell: bash
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          set -euo pipefail
-          CLOUDFLARE_API_TOKEN="$(printf '%s' "$CLOUDFLARE_API_TOKEN" | tr -d '\r\n')"
-          CLOUDFLARE_ACCOUNT_ID="$(printf '%s' "$CLOUDFLARE_ACCOUNT_ID" | tr -d '[:space:]')"
-          export CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
-          npx --yes "wrangler@${WRANGLER_VERSION}" pages deploy site --project-name="$CLOUDFLARE_PROJECT" --branch=main --commit-hash="$GITHUB_SHA" --commit-message="Live AI error probe $GITHUB_SHA"
-
-      - name: Read sanitized live AI error
+      - name: Reseal R20 worker
         shell: bash
         run: |
           set -euo pipefail
-          found=false
-          for i in {1..20}; do
-            body="$(curl -fsS 'https://lovelycoffeehouse.com/api/lovely-status' 2>/dev/null || true)"
-            echo "attempt=$i status=$body"
-            if BODY="$body" node -e "const p=JSON.parse(process.env.BODY||'{}');process.exit(Object.prototype.hasOwnProperty.call(p,'binding')?0:1)" 2>/dev/null; then
-              found=true
-              break
-            fi
-            sleep 2
-          done
-          echo "diagnostic_seen=$found"
+          hash="$(sha256sum site/_worker.js | awk '{print $1}')"
+          python3 - "$hash" <<'PY'
+          from pathlib import Path
+          import sys,re
+          h=sys.argv[1]
+          p=Path('release/r20-site.sha256')
+          t=p.read_text()
+          n=re.sub(r'^[0-9a-f]{64}  _worker\.js$', f'{h}  _worker.js', t, count=1, flags=re.M)
+          if n == t:
+              raise SystemExit('worker seal target not found')
+          p.write_text(n)
+          PY
+          (cd site && sha256sum -c ../release/r20-site.sha256)
 
-      - name: Restore sealed production worker
+      - name: Create quota-hardening branch
         shell: bash
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-          cp "$RUNNER_TEMP/original-worker.js" site/_worker.js
-          CLOUDFLARE_API_TOKEN="$(printf '%s' "$CLOUDFLARE_API_TOKEN" | tr -d '\r\n')"
-          CLOUDFLARE_ACCOUNT_ID="$(printf '%s' "$CLOUDFLARE_ACCOUNT_ID" | tr -d '[:space:]')"
-          export CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
-          npx --yes "wrangler@${WRANGLER_VERSION}" pages deploy site --project-name="$CLOUDFLARE_PROJECT" --branch=main --commit-hash="$GITHUB_SHA" --commit-message="Restore sealed worker after live AI error probe $GITHUB_SHA"
+          branch='chatgpt/quota-hardening-r20-20260912'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -b "$branch"
+          git add site/_worker.js release/r20-site.sha256 .github/workflows/deploy-production.yml
+          git commit -m 'Reduce Workers AI quota waste and harden production config'
+          git push --force-with-lease origin "$branch"
+          echo "Created $branch"
