@@ -120,7 +120,7 @@ jobs:
           fetch "$DEPLOYMENT_URL/build-info.json" "$tmp/build-info.json"
           printf '%s  %s\n' 'ae7d9b6b18b317f33cf4230ccf74875b2167fb1fc3cf30bc2260d7063459c073' "$tmp/build-info.json" | sha256sum -c -
           fetch "$DEPLOYMENT_URL/sw.js" "$tmp/sw.js"
-          printf '%s  %s\n' '8ce0f8a8d65087b9db598c76e57fed96ef9122e3d051c0c7f03c8ec7f5e08ac1' "$tmp/sw.js" | sha256sum -c -
+          printf '%s  %s\n' 'ff14d05dbb9beb225ae18b77045ae3bd9007d88326c18af5ce1e1e9c48622170' "$tmp/sw.js" | sha256sum -c -
           status="$(curl -fsS "$DEPLOYMENT_URL/api/lovely-status")"
           STATUS="$status" node -e "const p=JSON.parse(process.env.STATUS||'{}'); if(p.ai!==true) throw new Error('AI not ready')"
           body='{"question":"add one cappuccino","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
@@ -135,7 +135,7 @@ jobs:
           curl -fsSL --retry 5 --retry-delay 2 'https://lovelycoffeehouse.com/robots.txt' -o "$tmp/robots.txt"
           printf '%s  %s\n' '92eac92c256c998178345aa7f99477a2a63223c6091a840607d59e3c98fe3303' "$tmp/robots.txt" | sha256sum -c -
           curl -fsSL --retry 5 --retry-delay 2 'https://lovelycoffeehouse.com/sw.js' -o "$tmp/sw.js"
-          printf '%s  %s\n' '8ce0f8a8d65087b9db598c76e57fed96ef9122e3d051c0c7f03c8ec7f5e08ac1' "$tmp/sw.js" | sha256sum -c -
+          printf '%s  %s\n' 'ff14d05dbb9beb225ae18b77045ae3bd9007d88326c18af5ce1e1e9c48622170' "$tmp/sw.js" | sha256sum -c -
           status="$(curl -fsS --retry 5 --retry-delay 2 'https://lovelycoffeehouse.com/api/lovely-status')"
           STATUS="$status" node -e "const p=JSON.parse(process.env.STATUS||'{}'); if(p.ai!==true) throw new Error('custom AI not ready')"
           body='{"question":"add one cappuccino","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
