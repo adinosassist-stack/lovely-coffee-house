@@ -1,0 +1,54 @@
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(self), geolocation=()
+  X-Frame-Options: DENY
+  X-Permitted-Cross-Domain-Policies: none
+  Cross-Origin-Opener-Policy: same-origin-allow-popups
+  Cross-Origin-Resource-Policy: same-origin
+  Origin-Agent-Cluster: ?1
+  Strict-Transport-Security: max-age=31536000
+  X-Lovely-Build: lovely-live-source-r17-structured-action-planner-20260911-r17
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; frame-src 'none'; worker-src 'self'; img-src 'self'; media-src 'self' blob:; style-src 'self'; style-src-attr 'none'; script-src 'self' 'sha256-WTNeKEJgfmEKZ5/HVXLCpuC/pByOTPcGaw1DkELwdes=' 'sha256-zd6du9ZixQQkVaHeSTYltUsEx5zvuDrhvmRuzWWLTog='; script-src-attr 'none'; connect-src 'self'; font-src 'self'; manifest-src 'self'; form-action 'self'; upgrade-insecure-requests
+
+/assets/*
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+
+/assets/app.5ed8a120fc5b.css
+  Cache-Control: public, max-age=31536000, immutable
+
+/assets/home-order.316103234499.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/assets/lovely-ai.8f169dbb9daf.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/robots.txt
+  Cache-Control: public, max-age=3600
+
+/sitemap.xml
+  Cache-Control: public, max-age=3600
+
+/sw.js
+  Cache-Control: no-cache, no-store, must-revalidate
+  Service-Worker-Allowed: /
+
+/manifest.webmanifest
+  Cache-Control: no-cache
+  Content-Type: application/manifest+json
+
+/site.webmanifest
+  Cache-Control: no-cache
+  Content-Type: application/manifest+json
+
+/build-info.json
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/assets/pwa-install.28f037cda461.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/assets/rooms-booking.5523918c3abd.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/assets/lovely-rooms-ai.57af084298ec.js
+  Cache-Control: public, max-age=31536000, immutable
