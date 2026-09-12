@@ -1,0 +1,20 @@
+Lovely Coffee House R19 — JSON Object Planner Compatibility Hardening
+
+Build: lovely-live-source-r19-json-object-planner-20260912-r19
+
+Production evidence from R18:
+- Exact R18 static hashes: PASS
+- Workers AI binding/status: READY
+- Generic Workers AI route: operational
+- Strict JSON-schema /api/lovely-actions call: HTTP 503
+
+Root-cause direction:
+Cloudflare documents that JSON Schema mode can fail when the model cannot satisfy a requested schema. R18 used a deeply nested action schema with optional action-specific properties.
+
+R19 change:
+- Replaces only the planner's strict json_schema response_format with json_object mode.
+- Keeps the existing prompt requiring the exact planner envelope and exact catalog product names.
+- Keeps deterministic server-side normalization, catalog resolution, grounding, quantity validation, fulfilment validation and handoff checks before any browser mutation.
+- Keeps the browser deterministic action executor as the final mutation authority.
+- Bumps build and service-worker cache generation.
+- Retains R18 and R17 manifests for rollback.

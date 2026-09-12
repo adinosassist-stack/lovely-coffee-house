@@ -1,10 +1,10 @@
-// Lovely Coffee House R18 - deployment-safe single-file Cloudflare Pages Worker
+// Lovely Coffee House R19 - deployment-safe single-file Cloudflare Pages Worker
 // Generated from verified modular R10 sources.
 
 /* ===== worker/config.js ===== */
 const M_worker_config = (() => {
 
-const BUILD_ID = 'lovely-live-source-r18-planner-json-mode-20260912-r18';
+const BUILD_ID = 'lovely-live-source-r19-json-object-planner-20260912-r19';
 const CANONICAL_ORIGIN = 'https://lovelycoffeehouse.com';
 const AI_MODEL = '@cf/meta/llama-3.1-8b-instruct-fast';
 const TTS_MODEL = '@cf/deepgram/aura-2-en';
@@ -1291,35 +1291,7 @@ ${JSON.stringify(safeStateSummary(payload.state))}`;
     messages,
     max_tokens:420,
     temperature:0,
-    response_format: {
-      type: 'json_schema',
-      json_schema: {
-        type: 'object',
-        properties: {
-          handled: { type: 'boolean' },
-          actions: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                type: { type: 'string', enum: ['ADD_ITEM','REMOVE_ITEM','SET_QUANTITY','SWAP_ITEM','SET_FULFILMENT','CLEAR_ORDER'] },
-                product: { type: 'string' },
-                quantity: { type: 'integer' },
-                fromProduct: { type: 'string' },
-                toProduct: { type: 'string' },
-                fromQuantity: { type: 'integer' },
-                toQuantity: { type: 'integer' },
-                value: { type: 'string', enum: ['collection','delivery','corporate'] },
-              },
-              required: ['type'],
-            },
-          },
-          handoff: { type: 'boolean' },
-          clarify: { enum: [null, 'product', 'quantity', 'fulfilment'] },
-        },
-        required: ['handled','actions','handoff','clarify'],
-      },
-    },
+    response_format: { type: 'json_object' },
   }), TIMEOUTS.aiMs, 'ai_unavailable');
   const structured = result?.response ?? result?.result?.response ?? result;
   const parsed = structured && typeof structured === 'object' && !Array.isArray(structured)

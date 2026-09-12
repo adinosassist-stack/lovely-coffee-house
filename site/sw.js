@@ -1,6 +1,6 @@
-const SW_VERSION = '2026-09-12-r18-planner-json';
-const STATIC_CACHE = 'lovely-static-r18-planner-json';
-const NAV_CACHE = 'lovely-nav-r18-planner-json';
+const SW_VERSION = '2026-09-12-r19-json-object';
+const STATIC_CACHE = 'lovely-static-r19-json-object';
+const NAV_CACHE = 'lovely-nav-r19-json-object';
 const CACHE_PREFIXES = ['lovely-static-', 'lovely-nav-', 'lovely-pwa-'];
 const PRECACHE = [
   '/',
