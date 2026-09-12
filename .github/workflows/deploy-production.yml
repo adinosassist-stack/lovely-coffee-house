@@ -14,6 +14,7 @@ concurrency:
 
 env:
   CLOUDFLARE_PROJECT: lovelycoffeehouse
+  CLOUDFLARE_CUSTOM_DOMAIN: lovelycoffeehouse.com
   WRANGLER_VERSION: 4.131.0
   EXPECTED_BUILD: lovely-live-source-r17-structured-action-planner-20260911-r17
 
@@ -70,7 +71,7 @@ jobs:
             exit 1
           fi
 
-          # Persist normalized values for the deploy step without logging either secret.
+          # Persist normalized values for all following steps without logging them.
           {
             printf 'CLOUDFLARE_API_TOKEN=%s\n' "$CLOUDFLARE_API_TOKEN"
             printf 'CLOUDFLARE_ACCOUNT_ID=%s\n' "$CLOUDFLARE_ACCOUNT_ID"
@@ -79,13 +80,51 @@ jobs:
           node --version
           npx --yes "wrangler@${WRANGLER_VERSION}" --version
           npx --yes "wrangler@${WRANGLER_VERSION}" pages project list --json > "$RUNNER_TEMP/pages-projects.json"
-          PROJECTS_JSON="$(cat "$RUNNER_TEMP/pages-projects.json")" node - <<'NODE'
+
+          # Prefer the sealed deploy-kit project name. If it differs in Cloudflare,
+          # resolve the one project actually attached to the production custom domain.
+          resolved_project="$(PROJECTS_JSON="$(cat "$RUNNER_TEMP/pages-projects.json")" node - <<'NODE'
           const projects = JSON.parse(process.env.PROJECTS_JSON || '[]');
-          if (!Array.isArray(projects) || !projects.some(p => p?.name === process.env.CLOUDFLARE_PROJECT)) {
-            throw new Error(`Cloudflare Pages project '${process.env.CLOUDFLARE_PROJECT}' is not visible to the configured token/account`);
+          if (!Array.isArray(projects)) throw new Error('Wrangler did not return a Pages project array');
+          const expected = process.env.CLOUDFLARE_PROJECT;
+          const domain = process.env.CLOUDFLARE_CUSTOM_DOMAIN;
+          if (projects.some(p => p?.name === expected)) {
+            process.stdout.write(expected);
+            process.exit(0);
           }
-          console.log(`Cloudflare Pages target qualified: ${process.env.CLOUDFLARE_PROJECT}`);
+
+          const token = process.env.CLOUDFLARE_API_TOKEN;
+          const account = process.env.CLOUDFLARE_ACCOUNT_ID;
+          const matches = [];
+          for (const project of projects) {
+            if (!project?.name) continue;
+            const url = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(account)}/pages/projects/${encodeURIComponent(project.name)}/domains`;
+            const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok || payload?.success === false) continue;
+            const domains = Array.isArray(payload?.result) ? payload.result : [];
+            if (domains.some(entry => String(entry?.name || '').toLowerCase() === domain.toLowerCase())) {
+              matches.push(project.name);
+            }
+          }
+
+          if (matches.length === 1) {
+            process.stdout.write(matches[0]);
+            process.exit(0);
+          }
+
+          const names = projects.map(p => p?.name).filter(Boolean);
+          console.error(`Expected Pages project '${expected}' not found and production domain '${domain}' resolved to ${matches.length} matching projects.`);
+          console.error(`Accessible Pages projects (${names.length}): ${names.length ? names.join(', ') : '(none)'}`);
+          process.exit(1);
           NODE
+          )"
+
+          [ -n "$resolved_project" ] || { echo '::error::Could not resolve the Cloudflare Pages production project'; exit 1; }
+          CLOUDFLARE_PROJECT="$resolved_project"
+          export CLOUDFLARE_PROJECT
+          printf 'CLOUDFLARE_PROJECT=%s\n' "$CLOUDFLARE_PROJECT" >> "$GITHUB_ENV"
+          echo "Cloudflare Pages target qualified: $CLOUDFLARE_PROJECT"
 
       - name: Deploy exact R17 source to Cloudflare Pages production
         id: deploy
