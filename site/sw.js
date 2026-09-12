@@ -1,6 +1,6 @@
-const SW_VERSION = '2026-09-12-r20-mobile-half-duplex-v2';
-const STATIC_CACHE = 'lovely-static-r20-mobile-half-duplex-v2';
-const NAV_CACHE = 'lovely-nav-r20-mobile-half-duplex-v2';
+const SW_VERSION = '2026-09-12-r20-full-handsfree-bargein-v3';
+const STATIC_CACHE = 'lovely-static-r20-full-handsfree-bargein-v3';
+const NAV_CACHE = 'lovely-nav-r20-full-handsfree-bargein-v3';
 const CACHE_PREFIXES = ['lovely-static-', 'lovely-nav-', 'lovely-pwa-'];
 const PRECACHE = [
   '/',
