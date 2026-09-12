@@ -1,8 +1,12 @@
 name: Bootstrap exact R17 source
 
 on:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
+      - main
       - bootstrap/r17-github-deploy-20260912
   workflow_dispatch:
 
@@ -10,18 +14,17 @@ permissions:
   contents: write
 
 concurrency:
-  group: lovely-coffee-house-r17-bootstrap
+  group: lovely-coffee-house-r17-bootstrap-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   mirror-and-seal:
-    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[source-mirror]') }}
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[source-mirror]') }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout bootstrap branch
+      - name: Checkout candidate
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ github.ref_name }}
           fetch-depth: 0
 
       - name: Reconstruct sealed R17 Worker
@@ -48,10 +51,9 @@ jobs:
               _worker.js|_headers) continue ;;
             esac
             mkdir -p "site/$(dirname "$path")"
-            url="$ORIGIN/$path"
             curl --location --silent --show-error --retry 4 --retry-delay 2 --retry-all-errors \
               --connect-timeout 15 --max-time 90 \
-              -o "site/$path" "$url"
+              -o "site/$path" "$ORIGIN/$path"
           done < release/r17-site.sha256
           cp .bootstrap-out/_worker.js site/_worker.js
           cp bootstrap/_headers site/_headers
@@ -75,7 +77,8 @@ jobs:
           console.log(`Verified ${info.build}`);
           NODE
 
-      - name: Commit exact R17 source to bootstrap branch
+      - name: Commit exact R17 source
+        if: ${{ github.event_name != 'pull_request' }}
         shell: bash
         run: |
           set -euo pipefail
