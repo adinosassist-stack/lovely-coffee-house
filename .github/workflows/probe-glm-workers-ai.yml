@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   quota-hardening:
-    if: contains(github.event.head_commit.message, '[quota-hardening]')
+    if: contains(github.event.head_commit.message, '[quota-hardening-worker]')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout main
@@ -17,13 +17,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Patch status probe and production config handling
+      - name: Make status checks quota-free
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-
           worker = Path('site/_worker.js')
           t = worker.read_text()
           old = "const M_worker_routes_status = (() => {\nconst { probeAi } = M_worker_lib_ai;\nconst { apiJson } = M_worker_lib_security;\nasync function handleStatus({ env }) {\n  const ai = await probeAi(env);\n  return apiJson({ ai });\n}\nreturn { handleStatus };\n})();"
@@ -31,26 +30,9 @@ jobs:
           if old not in t:
               raise SystemExit('status module target not found')
           worker.write_text(t.replace(old, new, 1))
-
-          deploy = Path('.github/workflows/deploy-production.yml')
-          d = deploy.read_text()
-          replacements = {
-              "r'^\\s*pages_build_output_dir\\s*=.*$'": "r'^[ \\t]*pages_build_output_dir[ \\t]*=.*$'",
-              "rf'^\\s*\\[{re.escape(table)}\\]\\s*$'": "rf'^[ \\t]*\\[{re.escape(table)}\\][ \\t]*$'",
-              "r'^\\s*\\[[^\\]]+\\]\\s*$'": "r'^[ \\t]*\\[[^\\]]+\\][ \\t]*$'",
-              "r'^\\s*binding\\s*=.*$'": "r'^[ \\t]*binding[ \\t]*=.*$'",
-              "r'^\\s*\\[env\\.production\\]\\s*$'": "r'^[ \\t]*\\[env\\.production\\][ \\t]*$'",
-          }
-          for a, b in replacements.items():
-              if a not in d:
-                  raise SystemExit('deploy regex target not found: ' + a)
-              d = d.replace(a, b)
-          deploy.write_text(d)
           PY
-
           node --check site/_worker.js
           grep -q "runtime: 'unchecked'" site/_worker.js
-          grep -q "aiBindingReady(env)" site/_worker.js
 
       - name: Reseal R20 worker
         shell: bash
@@ -78,7 +60,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git checkout -b "$branch"
-          git add site/_worker.js release/r20-site.sha256 .github/workflows/deploy-production.yml
-          git commit -m 'Reduce Workers AI quota waste and harden production config'
-          git push --force-with-lease origin "$branch"
+          git add site/_worker.js release/r20-site.sha256
+          git commit -m 'Stop status checks consuming Workers AI quota'
+          git push origin "$branch"
           echo "Created $branch"
