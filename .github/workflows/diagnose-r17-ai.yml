@@ -1,0 +1,38 @@
+name: Diagnose R17 AI Routes
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe generic AI and planner routes
+        shell: bash
+        env:
+          BASE_URL: https://abbd9232.lovelycoffeehouse.pages.dev
+        run: |
+          set -euo pipefail
+          common='{"question":"What is a cappuccino?","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
+          planner='{"question":"add one cappuccino","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
+
+          call_route() {
+            local label="$1" path="$2" payload="$3" out="$RUNNER_TEMP/${label}.json"
+            local status
+            status="$(curl --silent --show-error --output "$out" --write-out '%{http_code}' \
+              -H "Origin: $BASE_URL" \
+              -H 'Content-Type: application/json' \
+              -H 'X-Lovely-Client: githubdiagnostic1' \
+              --data "$payload" "$BASE_URL$path" || true)"
+            echo "$label status=$status"
+            printf '%s body=' "$label"
+            cat "$out" 2>/dev/null || true
+            echo
+          }
+
+          call_route generic /api/lovely-ai "$common"
+          call_route planner /api/lovely-actions "$planner"
