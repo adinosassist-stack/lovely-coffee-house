@@ -1,0 +1,53 @@
+name: Stage sealed R18 source
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  stage-r18:
+    if: contains(github.event.head_commit.message, '[stage-r18]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+
+      - name: Download sealed R18 artifact and stage runtime source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: '10300949254'
+          RELEASE_BRANCH: release/r18-planner-json-mode-20260912
+        run: |
+          set -euo pipefail
+          tmp="$RUNNER_TEMP/r18"
+          mkdir -p "$tmp"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > "$tmp/r18.zip"
+          unzip -q "$tmp/r18.zip" -d "$tmp/artifact"
+
+          git checkout -B "$RELEASE_BRANCH" origin/main
+          cp "$tmp/artifact/site/_worker.js" site/_worker.js
+          cp "$tmp/artifact/site/build-info.json" site/build-info.json
+          cp "$tmp/artifact/site/sw.js" site/sw.js
+          cp "$tmp/artifact/release/r18-site.sha256" release/r18-site.sha256
+          cp "$tmp/artifact/release/R18_PLANNER_JSON_HARDENING_REPORT.txt" release/R18_PLANNER_JSON_HARDENING_REPORT.txt
+          cp "$tmp/artifact/README.md" README.md
+
+          test "$(wc -l < release/r18-site.sha256)" -eq 50
+          (cd site && sha256sum -c ../release/r18-site.sha256)
+          node --check site/_worker.js
+          grep -q 'lovely-live-source-r18-planner-json-mode-20260912-r18' site/_worker.js
+          grep -q 'lovely-live-source-r18-planner-json-mode-20260912-r18' site/build-info.json
+
+          git config user.name 'adinosassist-stack'
+          git config user.email 'adinosassist@gmail.com'
+          git add site/_worker.js site/build-info.json site/sw.js release/r18-site.sha256 release/R18_PLANNER_JSON_HARDENING_REPORT.txt README.md
+          git diff --cached --check
+          git commit -m 'Stage sealed R18 runtime source'
+          git push --force-with-lease origin HEAD:"$RELEASE_BRANCH"
