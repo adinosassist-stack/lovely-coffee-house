@@ -1,6 +1,6 @@
-const SW_VERSION = '2026-09-12-r20-whatsapp-send-clarity';
-const STATIC_CACHE = 'lovely-static-r20-whatsapp-send-clarity';
-const NAV_CACHE = 'lovely-nav-r20-whatsapp-send-clarity';
+const SW_VERSION = '2026-09-12-r20-voice-health-retention';
+const STATIC_CACHE = 'lovely-static-r20-voice-health-retention';
+const NAV_CACHE = 'lovely-nav-r20-voice-health-retention';
 const CACHE_PREFIXES = ['lovely-static-', 'lovely-nav-', 'lovely-pwa-'];
 const PRECACHE = [
   '/',
