@@ -66,7 +66,6 @@ jobs:
           status="$(curl --silent --show-error --output "$body" --write-out '%{http_code}' \
             --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$CLOUDFLARE_PROJECT")"
-
           if [ "$status" != '200' ]; then
             echo "::error::Cloudflare exact-project lookup failed with HTTP $status"
             PROJECT_JSON="$(cat "$body")" node - <<'NODE'
@@ -76,7 +75,6 @@ jobs:
           NODE
             exit 1
           fi
-
           PROJECT_JSON="$(cat "$body")" node - <<'NODE'
           const payload = JSON.parse(process.env.PROJECT_JSON || '{}');
           if (payload.success !== true || payload.result?.name !== process.env.CLOUDFLARE_PROJECT) {
@@ -84,12 +82,10 @@ jobs:
           }
           console.log(`Cloudflare Pages target qualified exactly: ${payload.result.name}`);
           NODE
-
           {
             printf 'CLOUDFLARE_API_TOKEN=%s\n' "$CLOUDFLARE_API_TOKEN"
             printf 'CLOUDFLARE_ACCOUNT_ID=%s\n' "$CLOUDFLARE_ACCOUNT_ID"
           } >> "$GITHUB_ENV"
-
           npx --yes "wrangler@${WRANGLER_VERSION}" --version
 
       - name: Preserve Pages config and enable Workers AI binding
@@ -109,15 +105,37 @@ jobs:
               text = re.sub(r'^\s*pages_build_output_dir\s*=.*$', output_line, text, flags=re.M)
           else:
               text = output_line + '\n' + text
-          if not re.search(r'^\s*\[ai\]\s*$', text, flags=re.M):
-              text = text.rstrip() + '\n\n[ai]\nbinding = "AI"\n'
-          elif not re.search(r'^\s*binding\s*=\s*["\']AI["\']\s*$', text, flags=re.M):
-              text = re.sub(r'(^\s*\[ai\]\s*$)', r'\1\nbinding = "AI"', text, count=1, flags=re.M)
+
+          def ensure_ai_table(text, table):
+              header = f'[{table}]'
+              pattern = rf'^\s*\[{re.escape(table)}\]\s*$'
+              if not re.search(pattern, text, flags=re.M):
+                  return text.rstrip() + f'\n\n{header}\nbinding = "AI"\n'
+              # Replace/add binding only inside this table, before the next table header.
+              m = re.search(pattern, text, flags=re.M)
+              start = m.end()
+              next_header = re.search(r'^\s*\[[^\]]+\]\s*$', text[start:], flags=re.M)
+              end = start + next_header.start() if next_header else len(text)
+              body = text[start:end]
+              if re.search(r'^\s*binding\s*=.*$', body, flags=re.M):
+                  body = re.sub(r'^\s*binding\s*=.*$', 'binding = "AI"', body, count=1, flags=re.M)
+              else:
+                  body = '\nbinding = "AI"' + body
+              return text[:start] + body + text[end:]
+
+          text = ensure_ai_table(text, 'ai')
+          # Cloudflare Pages downloaded config contains env.production; non-inheritable
+          # bindings must also be present in that environment.
+          if re.search(r'^\s*\[env\.production\]\s*$', text, flags=re.M):
+              text = ensure_ai_table(text, 'env.production.ai')
           path.write_text(text)
           PY
           grep -q '^pages_build_output_dir = "./site"$' wrangler.toml
           grep -q '^\[ai\]$' wrangler.toml
-          echo 'Existing Pages configuration preserved; Workers AI binding AI added for deployment.'
+          if grep -q '^\[env.production\]$' wrangler.toml; then
+            grep -q '^\[env.production.ai\]$' wrangler.toml
+          fi
+          echo 'Existing Pages configuration preserved; Workers AI binding AI enabled for top-level and production environment.'
 
       - name: Deploy exact R17 source to Cloudflare Pages production
         id: deploy
@@ -142,14 +160,26 @@ jobs:
           set -euo pipefail
           tmp="$RUNNER_TEMP/lovely-production-smoke"
           mkdir -p "$tmp"
-          curl --fail --silent --show-error --location --retry 5 --retry-delay 2 "$DEPLOYMENT_URL/build-info.json" -o "$tmp/build-info.json"
+          fetch_ready() {
+            local url="$1" out="$2"
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              if curl --fail --silent --show-error --location "$url" -o "$out"; then return 0; fi
+              sleep 2
+            done
+            return 1
+          }
+          fetch_ready "$DEPLOYMENT_URL/build-info.json" "$tmp/build-info.json"
           printf '%s  %s\n' 'f6bad5f1b54780a7d1ac9bb77ddd6215d0431ccc3fe0527f77bf5d630b4ad32a' "$tmp/build-info.json" | sha256sum -c -
-          curl --fail --silent --show-error --location --retry 5 --retry-delay 2 "$DEPLOYMENT_URL/sw.js" -o "$tmp/sw.js"
+          fetch_ready "$DEPLOYMENT_URL/sw.js" "$tmp/sw.js"
           printf '%s  %s\n' 'd10f722ce5171ef4907b5c06798cf641ae40e62db200804ddb6a588984c69f06' "$tmp/sw.js" | sha256sum -c -
-          curl --fail --silent --show-error --location --retry 5 --retry-delay 2 "$DEPLOYMENT_URL/assets/lovely-ai.8f169dbb9daf.js" -o "$tmp/lovely-ai.js"
+          fetch_ready "$DEPLOYMENT_URL/assets/lovely-ai.8f169dbb9daf.js" "$tmp/lovely-ai.js"
           printf '%s  %s\n' '8f169dbb9daf4c87badf614108443e71e2dc8732c684540b0a164723c8ff853c' "$tmp/lovely-ai.js" | sha256sum -c -
 
-          status_json="$(curl --fail --silent --show-error --retry 5 --retry-delay 2 "$DEPLOYMENT_URL/api/lovely-status")"
+          status_json=''
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if status_json="$(curl --fail --silent --show-error "$DEPLOYMENT_URL/api/lovely-status")"; then break; fi
+            sleep 2
+          done
           STATUS_JSON="$status_json" node - <<'NODE'
           const payload = JSON.parse(process.env.STATUS_JSON || '{}');
           if (payload.ai !== true) throw new Error(`Workers AI is not ready: ${JSON.stringify(payload)}`);
@@ -157,7 +187,11 @@ jobs:
           NODE
 
           planner_payload='{"question":"add one cappuccino","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
-          planner_json="$(curl --fail --silent --show-error --retry 5 --retry-delay 2 -H "Origin: $DEPLOYMENT_URL" -H 'Content-Type: application/json' -H 'X-Lovely-Client: githubproduction1' --data "$planner_payload" "$DEPLOYMENT_URL/api/lovely-actions")"
+          planner_json=''
+          for attempt in 1 2 3 4 5; do
+            if planner_json="$(curl --fail --silent --show-error -H "Origin: $DEPLOYMENT_URL" -H 'Content-Type: application/json' -H 'X-Lovely-Client: githubproduction1' --data "$planner_payload" "$DEPLOYMENT_URL/api/lovely-actions")"; then break; fi
+            sleep 2
+          done
           PLANNER_JSON="$planner_json" node - <<'NODE'
           const payload = JSON.parse(process.env.PLANNER_JSON || '{}');
           if (payload.handled !== true || !Array.isArray(payload.actions) || payload.actions.length < 1 || payload.actions[0]?.type !== 'ADD_ITEM') {
