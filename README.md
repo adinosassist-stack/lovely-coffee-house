@@ -4,11 +4,11 @@ Production source repository for [lovelycoffeehouse.com](https://lovelycoffeehou
 
 ## Current production candidate
 
-- Release: **R19 — JSON Object Planner Compatibility Hardening**
-- Build: `lovely-live-source-r19-json-object-planner-20260912-r19`
+- Release: **R20 — Header Consistency Hardening**
+- Build: `lovely-live-source-r20-header-consistency-20260912-r20`
 - Cloudflare Pages project: `lovelycoffeehouse`
-- Sealed site manifest: `release/r19-site.sha256` (50 files)
-- Rollback manifests retained: `release/r18-site.sha256`, `release/r17-site.sha256`
+- Sealed site manifest: `release/r20-site.sha256` (50 files)
+- Rollback manifests retained: R19, R18 and R17
 - Workers AI binding: `AI`
 
-R19 preserves the deterministic commerce validation and action-execution layers, while using Cloudflare Workers AI JSON Object mode for the planner instead of the stricter nested JSON Schema request that failed in production.
+R20 preserves the working R19 JSON Object structured planner and deterministic commerce controls, while aligning the static Pages release header with the active Worker/build identity.

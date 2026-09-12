@@ -1,0 +1,22 @@
+Lovely Coffee House R20 — Header Consistency Hardening
+
+Build: lovely-live-source-r20-header-consistency-20260912-r20
+
+Production evidence from R19:
+- Exact sealed source verification: PASS
+- Cloudflare exact project qualification: PASS
+- Pages deployment: PASS
+- Workers AI status: READY
+- Structured add-one-cappuccino planner: PASS
+- Custom-domain robots.txt and sw.js R19 hashes: PASS
+- Custom-domain release header check: mismatch
+
+Root cause found in source:
+- site/_headers still advertised the R17 build ID.
+
+R20 changes:
+- Aligns site/_headers X-Lovely-Build with the R20 Worker/build identity.
+- Preserves R19 JSON Object planner compatibility fix unchanged.
+- Preserves deterministic server-side catalog, grounding, quantity, fulfilment and handoff validation.
+- Bumps build and service-worker cache generation.
+- Retains R19/R18/R17 manifests for rollback.

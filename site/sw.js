@@ -1,6 +1,6 @@
-const SW_VERSION = '2026-09-12-r19-json-object';
-const STATIC_CACHE = 'lovely-static-r19-json-object';
-const NAV_CACHE = 'lovely-nav-r19-json-object';
+const SW_VERSION = '2026-09-12-r20-header-consistency';
+const STATIC_CACHE = 'lovely-static-r20-header-consistency';
+const NAV_CACHE = 'lovely-nav-r20-header-consistency';
 const CACHE_PREFIXES = ['lovely-static-', 'lovely-nav-', 'lovely-pwa-'];
 const PRECACHE = [
   '/',

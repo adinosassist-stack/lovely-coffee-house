@@ -1,6 +1,6 @@
 {
-  "build": "lovely-live-source-r19-json-object-planner-20260912-r19",
-  "source": "Lovely Coffee House R18 + R19 Workers AI JSON-object planner compatibility hardening with deterministic server validation and client action execution",
+  "build": "lovely-live-source-r20-header-consistency-20260912-r20",
+  "source": "Lovely Coffee House R19 + R20 release-header consistency hardening; JSON-object planner and deterministic commerce validation preserved",
   "frontend": {
     "css": "app.5ed8a120fc5b.css",
     "order": "home-order.316103234499.js",
@@ -10,9 +10,9 @@
     "rooms_ai": "lovely-rooms-ai.57af084298ec.js"
   },
   "backend": "Cloudflare Pages Advanced Mode / Workers AI modular routes",
-  "sw_version": "2026-09-12-r19-json-object",
+  "sw_version": "2026-09-12-r20-header-consistency",
   "vat_enabled": false,
   "ai_binding": "AI",
-  "artifact": "release/r19-site.sha256",
+  "artifact": "release/r20-site.sha256",
   "deploymentForm": "single-file-worker-direct-upload"
 }

@@ -1,10 +1,10 @@
-// Lovely Coffee House R19 - deployment-safe single-file Cloudflare Pages Worker
+// Lovely Coffee House R20 - deployment-safe single-file Cloudflare Pages Worker
 // Generated from verified modular R10 sources.
 
 /* ===== worker/config.js ===== */
 const M_worker_config = (() => {
 
-const BUILD_ID = 'lovely-live-source-r19-json-object-planner-20260912-r19';
+const BUILD_ID = 'lovely-live-source-r20-header-consistency-20260912-r20';
 const CANONICAL_ORIGIN = 'https://lovelycoffeehouse.com';
 const AI_MODEL = '@cf/meta/llama-3.1-8b-instruct-fast';
 const TTS_MODEL = '@cf/deepgram/aura-2-en';
