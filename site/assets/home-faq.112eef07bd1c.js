@@ -57,12 +57,7 @@
       toast._lovelyEnhancementTimer=setTimeout(function(){toast.classList.remove('show');},duration||4200);
       return;
     }
-    var note=document.createElement('div');
-    note.setAttribute('role','status');
-    note.textContent=text;
-    note.style.cssText='position:fixed;left:16px;right:16px;bottom:20px;z-index:2147483645;max-width:560px;margin:auto;padding:13px 15px;border-radius:14px;background:#fff;color:#222;box-shadow:0 14px 38px rgba(0,0,0,.18);font:500 14px/1.4 system-ui,sans-serif';
-    document.body.appendChild(note);
-    setTimeout(function(){note.remove()},duration||4200);
+    try{window.alert(text)}catch(_){}
   }
 
   // If a customer speaks to Lovely and voice replies are on, every final bot text should
@@ -324,36 +319,34 @@
   function closePopup(){
     if(!popup)return;
     var node=popup;popup=null;
+    try{if(node.open&&typeof node.close==='function')node.close()}catch(_){}
     node.remove();
-    if(popupReturnFocus&&document.contains(popupReturnFocus)){try{popupReturnFocus.focus()}catch(_){}}
+    if(popupReturnFocus&&document.contains(popupReturnFocus)){try{popupReturnFocus.focus()}catch(_){} }
     popupReturnFocus=null;
   }
   function showPopup(title,text,actions,small){
     closePopup();
     popupReturnFocus=document.activeElement;
-    var overlay=document.createElement('div');
-    overlay.className='lovely-customer-popup';
-    overlay.setAttribute('role','presentation');
-    overlay.style.cssText='position:fixed;inset:0;z-index:2147483646;background:rgba(25,25,25,.28);display:flex;align-items:flex-end;justify-content:center;padding:16px';
-    var card=document.createElement('section');
-    card.setAttribute('role','dialog');card.setAttribute('aria-modal','true');card.setAttribute('aria-label',title);
-    card.style.cssText='width:min(520px,100%);background:#fff;color:#222;border-radius:18px;padding:18px;box-shadow:0 20px 55px rgba(0,0,0,.22);font-family:system-ui,sans-serif';
-    var h=document.createElement('h3');h.textContent=title;h.style.cssText='margin:0 0 8px;font-size:18px;line-height:1.25;font-weight:650';
-    var p=document.createElement('p');p.textContent=text;p.style.cssText='margin:0 0 14px;font-size:14px;line-height:1.5';
-    card.append(h,p);
-    if(small){var s=document.createElement('p');s.textContent=small;s.style.cssText='margin:-4px 0 14px;font-size:12px;line-height:1.4;color:#666';card.appendChild(s)}
-    var row=document.createElement('div');row.style.cssText='display:flex;gap:8px;flex-wrap:wrap';
+    var dialog=document.createElement('dialog');
+    dialog.className='lovely-customer-popup';
+    dialog.setAttribute('aria-label',title);
+    var h=document.createElement('h3');h.textContent=title;
+    var p=document.createElement('p');p.textContent=text;
+    dialog.append(h,p);
+    if(small){var s=document.createElement('p');s.textContent=small;dialog.appendChild(s)}
+    var row=document.createElement('div');row.className='actions';
     (actions||[]).forEach(function(action,index){
-      var b=document.createElement('button');b.type='button';b.textContent=action.label;
-      b.style.cssText='appearance:none;border:1px solid #222;border-radius:999px;padding:10px 14px;background:'+(index===0?'#222':'#fff')+';color:'+(index===0?'#fff':'#222')+';font:600 12px/1 system-ui,sans-serif;cursor:pointer';
+      var b=document.createElement('button');b.type='button';b.textContent=action.label;b.className=index===0?'btn dark':'btn';
       b.addEventListener('click',function(){var fn=action.onClick;closePopup();if(fn)fn()});
       row.appendChild(b);
     });
-    card.appendChild(row);overlay.appendChild(card);document.body.appendChild(overlay);popup=overlay;
-    overlay.addEventListener('click',function(e){if(e.target===overlay)closePopup()});
-    setTimeout(function(){var first=card.querySelector('button');if(first)first.focus()},0);
+    dialog.appendChild(row);document.body.appendChild(dialog);popup=dialog;
+    dialog.addEventListener('cancel',function(e){e.preventDefault();closePopup()});
+    dialog.addEventListener('click',function(e){if(e.target===dialog)closePopup()});
+    if(typeof dialog.showModal==='function'){dialog.showModal();setTimeout(function(){var first=dialog.querySelector('button');if(first)first.focus()},0);return}
+    var primary=(actions||[])[0],accepted=window.confirm(title+'\n\n'+text+(small?'\n\n'+small:''));
+    closePopup();if(accepted&&primary&&primary.onClick)primary.onClick();
   }
-  document.addEventListener('keydown',function(e){if(e.key==='Escape'&&popup)closePopup()});
 
   function productRecommendation(items,cycle){
     var names=(items||[]).map(function(x){return String(x.name||'').toLowerCase()}).join(' ');
