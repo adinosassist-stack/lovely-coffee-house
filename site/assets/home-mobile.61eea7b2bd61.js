@@ -3,10 +3,11 @@
   if(quickOrder){quickOrder.addEventListener('click',function(){var top=document.getElementById('topOrder');if(top)top.click();});}
   var cmm=document.getElementById('corpMobileMenu');if(cmm){cmm.addEventListener('click',function(){var cm=document.getElementById('corpMenu');if(cm)cm.click();});}
 
-  // Mobile speaker-echo guard for Lovely hands-free voice.
-  // Keep the microphone listening so real barge-in still works, but suppress the
-  // assistant's own loudspeaker audio before it can trigger its speech-start/result
-  // handlers and cut off the reply.
+  // Reliable mobile voice turn-taking.
+  // Phone loudspeakers can feed Lovely's own TTS back into Web Speech Recognition.
+  // On handheld devices we therefore use half-duplex speech: while Lovely is speaking,
+  // automatic recognition starts are ignored. The mic button still stops Lovely
+  // immediately and starts listening, so the customer always has a reliable interrupt.
   var coarsePointer=false;
   try{coarsePointer=window.matchMedia&&window.matchMedia('(pointer: coarse)').matches;}catch(_){}
   var handheld=coarsePointer||/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent||'');
@@ -15,6 +16,7 @@
   var panel=document.getElementById('lovelyAiPanel');
   var body=document.getElementById('lovelyAiBody');
   var voiceToggle=document.getElementById('lovelyAiVoiceToggle');
+  var voiceStatus=document.getElementById('lovelyAiVoiceStatus');
   var activeMedia=new Set();
   var synthActive=false;
   var speakerStartedAt=0;
@@ -80,12 +82,19 @@
     }
     return false;
   }
+  function setMobileSpeakingStatus(){
+    if(!voiceStatus||!speakerActive())return;
+    if(/lovely is speaking|interrupt me/i.test(voiceStatus.textContent||'')){
+      voiceStatus.textContent='Lovely is speaking — tap the microphone to interrupt.';
+      voiceStatus.className='lovely-ai-voice-status speaking';
+    }
+  }
 
-  // Track Lovely's blob-audio playback, including the Cloudflare TTS path and the
-  // browser fallback added by the customer-care layer.
+  // Track Lovely's audio output so automatic speech recognition is locked out for
+  // the complete loudspeaker interval.
   try{
     var mediaProto=window.HTMLMediaElement&&window.HTMLMediaElement.prototype;
-    if(mediaProto&&typeof mediaProto.play==='function'&&!mediaProto.__lovelyEchoGuardV1){
+    if(mediaProto&&typeof mediaProto.play==='function'&&!mediaProto.__lovelyHalfDuplexV2){
       var nativePlay=mediaProto.play;
       mediaProto.play=function(){
         var el=this,src='';
@@ -93,23 +102,24 @@
         var track=aiVoiceContext()&&/^blob:/i.test(src);
         if(track){
           activeMedia.add(el);markSpeakerStart();
-          if(!el.__lovelyEchoRelease){
+          if(!el.__lovelyHalfDuplexRelease){
             var release=function(){activeMedia.delete(el);};
             el.addEventListener('ended',release);el.addEventListener('pause',release);el.addEventListener('error',release);
-            el.__lovelyEchoRelease=true;
+            el.__lovelyHalfDuplexRelease=true;
           }
+          setTimeout(setMobileSpeakingStatus,0);
         }
         var result=nativePlay.apply(el,arguments);
         if(result&&typeof result.catch==='function')result.catch(function(){activeMedia.delete(el);});
         return result;
       };
-      mediaProto.__lovelyEchoGuardV1=true;
+      mediaProto.__lovelyHalfDuplexV2=true;
     }
   }catch(_){}
 
   try{
     var synth=window.speechSynthesis;
-    if(synth&&typeof synth.speak==='function'&&!synth.__lovelyEchoGuardV1){
+    if(synth&&typeof synth.speak==='function'&&!synth.__lovelyHalfDuplexV2){
       var nativeSpeak=synth.speak.bind(synth),nativeCancel=typeof synth.cancel==='function'?synth.cancel.bind(synth):null;
       synth.speak=function(utter){
         if(aiVoiceContext()){
@@ -118,22 +128,37 @@
             var release=function(){synthActive=false;};
             utter.addEventListener('end',release);utter.addEventListener('error',release);
           }catch(_){}
+          setTimeout(setMobileSpeakingStatus,0);
         }
         return nativeSpeak(utter);
       };
       if(nativeCancel)synth.cancel=function(){synthActive=false;return nativeCancel();};
-      synth.__lovelyEchoGuardV1=true;
+      synth.__lovelyHalfDuplexV2=true;
     }
   }catch(_){}
 
-  // Wrap SpeechRecognition before Lovely AI creates its recognition instances.
-  // Speaker echo is swallowed, while genuine customer speech continues through to
-  // the normal final-result path and can still interrupt the assistant.
+  if(voiceStatus&&window.MutationObserver){
+    new MutationObserver(function(){setTimeout(setMobileSpeakingStatus,0);}).observe(voiceStatus,{childList:true,characterData:true,subtree:true});
+  }
+
+  // Wrap SpeechRecognition before Lovely AI creates its recognizers.
+  // The key fix is start(): automatic listening attempts while TTS is active are
+  // refused. Lovely's own onended handler then resumes hands-free listening after
+  // the speaker is silent. A user tap on the mic first stops TTS, so that start is
+  // allowed immediately.
   var NativeRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!NativeRecognition||NativeRecognition.__lovelyEchoGuardV1)return;
+  if(!NativeRecognition||NativeRecognition.__lovelyHalfDuplexV2)return;
   function GuardedRecognition(){
     var recognition=new NativeRecognition();
     try{
+      var nativeStart=recognition.start.bind(recognition);
+      recognition.start=function(){
+        if(speakerActive()){
+          setMobileSpeakingStatus();
+          return;
+        }
+        return nativeStart();
+      };
       recognition.addEventListener('speechstart',function(event){
         if(speakerActive())event.stopImmediatePropagation();
       },true);
@@ -147,7 +172,7 @@
   }
   GuardedRecognition.prototype=NativeRecognition.prototype;
   try{Object.setPrototypeOf(GuardedRecognition,NativeRecognition);}catch(_){}
-  GuardedRecognition.__lovelyEchoGuardV1=true;
+  GuardedRecognition.__lovelyHalfDuplexV2=true;
   if(window.SpeechRecognition===NativeRecognition)window.SpeechRecognition=GuardedRecognition;
   if(window.webkitSpeechRecognition===NativeRecognition)window.webkitSpeechRecognition=GuardedRecognition;
 })();
