@@ -92,6 +92,33 @@ jobs:
 
           npx --yes "wrangler@${WRANGLER_VERSION}" --version
 
+      - name: Preserve Pages config and enable Workers AI binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f wrangler.toml wrangler.json wrangler.jsonc
+          npx --yes "wrangler@${WRANGLER_VERSION}" pages download config "$CLOUDFLARE_PROJECT" --force
+          test -f wrangler.toml || { echo '::error::Wrangler did not generate wrangler.toml from the existing Pages project'; exit 1; }
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          path = Path('wrangler.toml')
+          text = path.read_text()
+          output_line = 'pages_build_output_dir = "./site"'
+          if re.search(r'^\s*pages_build_output_dir\s*=.*$', text, flags=re.M):
+              text = re.sub(r'^\s*pages_build_output_dir\s*=.*$', output_line, text, flags=re.M)
+          else:
+              text = output_line + '\n' + text
+          if not re.search(r'^\s*\[ai\]\s*$', text, flags=re.M):
+              text = text.rstrip() + '\n\n[ai]\nbinding = "AI"\n'
+          elif not re.search(r'^\s*binding\s*=\s*["\']AI["\']\s*$', text, flags=re.M):
+              text = re.sub(r'(^\s*\[ai\]\s*$)', r'\1\nbinding = "AI"', text, count=1, flags=re.M)
+          path.write_text(text)
+          PY
+          grep -q '^pages_build_output_dir = "./site"$' wrangler.toml
+          grep -q '^\[ai\]$' wrangler.toml
+          echo 'Existing Pages configuration preserved; Workers AI binding AI added for deployment.'
+
       - name: Deploy exact R17 source to Cloudflare Pages production
         id: deploy
         shell: bash
@@ -99,6 +126,7 @@ jobs:
           set -euo pipefail
           log="$RUNNER_TEMP/wrangler-deploy.log"
           npx --yes "wrangler@${WRANGLER_VERSION}" pages deploy site \
+            --config wrangler.toml \
             --project-name="$CLOUDFLARE_PROJECT" \
             --commit-hash="$GITHUB_SHA" \
             --commit-message="GitHub production ${GITHUB_SHA} ${EXPECTED_BUILD}" 2>&1 | tee "$log"
@@ -122,7 +150,7 @@ jobs:
           curl --fail --silent --show-error --location --retry 5 --retry-delay 2 "$DEPLOYMENT_URL/assets/lovely-ai.8f169dbb9daf.js" -o "$tmp/lovely-ai.js"
           printf '%s  %s\n' '8f169dbb9daf4c87badf614108443e71e2dc8732c684540b0a164723c8ff853c' "$tmp/lovely-ai.js" | sha256sum -c -
 
-          status_json="$(curl --fail --silent --show-error --retry 3 --retry-delay 2 "$DEPLOYMENT_URL/api/lovely-status")"
+          status_json="$(curl --fail --silent --show-error --retry 5 --retry-delay 2 "$DEPLOYMENT_URL/api/lovely-status")"
           STATUS_JSON="$status_json" node - <<'NODE'
           const payload = JSON.parse(process.env.STATUS_JSON || '{}');
           if (payload.ai !== true) throw new Error(`Workers AI is not ready: ${JSON.stringify(payload)}`);
@@ -130,7 +158,7 @@ jobs:
           NODE
 
           planner_payload='{"question":"add one cappuccino","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
-          planner_json="$(curl --fail --silent --show-error --retry 3 --retry-delay 2 -H "Origin: $DEPLOYMENT_URL" -H 'Content-Type: application/json' -H 'X-Lovely-Client: githubproduction1' --data "$planner_payload" "$DEPLOYMENT_URL/api/lovely-actions")"
+          planner_json="$(curl --fail --silent --show-error --retry 5 --retry-delay 2 -H "Origin: $DEPLOYMENT_URL" -H 'Content-Type: application/json' -H 'X-Lovely-Client: githubproduction1' --data "$planner_payload" "$DEPLOYMENT_URL/api/lovely-actions")"
           PLANNER_JSON="$planner_json" node - <<'NODE'
           const payload = JSON.parse(process.env.PLANNER_JSON || '{}');
           if (payload.handled !== true || !Array.isArray(payload.actions) || payload.actions.length < 1 || payload.actions[0]?.type !== 'ADD_ITEM') {
