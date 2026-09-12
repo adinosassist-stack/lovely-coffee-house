@@ -40,12 +40,14 @@ jobs:
                                   '// Lovely Coffee House R19 - deployment-safe single-file Cloudflare Pages Worker', 1)
 
           pattern = re.compile(r"""const result = await withTimeout\(env\.AI\.run\(AI_MODEL, \{\n\s*messages,\n\s*max_tokens:420,\n\s*temperature:0,\n\s*response_format: \{\n\s*type: 'json_schema',[\s\S]*?\n\s*\},\n\s*\}\), TIMEOUTS\.aiMs, 'ai_unavailable'\);""")
-          replacement = """const result = await withTimeout(env.AI.run(AI_MODEL, {
-    messages,
-    max_tokens:420,
-    temperature:0,
-    response_format: { type: 'json_object' },
-  }), TIMEOUTS.aiMs, 'ai_unavailable');"""
+          replacement = (
+              "const result = await withTimeout(env.AI.run(AI_MODEL, {\n"
+              "    messages,\n"
+              "    max_tokens:420,\n"
+              "    temperature:0,\n"
+              "    response_format: { type: 'json_object' },\n"
+              "  }), TIMEOUTS.aiMs, 'ai_unavailable');"
+          )
           worker, count = pattern.subn(replacement, worker, count=1)
           assert count == 1, f'expected one strict JSON-schema planner call, got {count}'
           assert "type: 'json_schema'" not in worker, 'strict planner schema still present'
@@ -64,12 +66,12 @@ jobs:
           sw_path = Path('site/sw.js')
           sw = sw_path.read_text()
           for old, new in {
-            '2026-09-12-r18-planner-json': '2026-09-12-r19-json-object',
-            'lovely-static-r18-planner-json': 'lovely-static-r19-json-object',
-            'lovely-nav-r18-planner-json': 'lovely-nav-r19-json-object',
+              '2026-09-12-r18-planner-json': '2026-09-12-r19-json-object',
+              'lovely-static-r18-planner-json': 'lovely-static-r19-json-object',
+              'lovely-nav-r18-planner-json': 'lovely-nav-r19-json-object',
           }.items():
-            assert old in sw, f'missing service worker marker {old}'
-            sw = sw.replace(old, new, 1)
+              assert old in sw, f'missing service worker marker {old}'
+              sw = sw.replace(old, new, 1)
           sw_path.write_text(sw)
 
           report = '''Lovely Coffee House R19 — JSON Object Planner Compatibility Hardening\n\nBuild: lovely-live-source-r19-json-object-planner-20260912-r19\n\nProduction evidence from R18:\n- Exact R18 static hashes: PASS\n- Workers AI binding/status: READY\n- Generic Workers AI route: operational\n- Strict JSON-schema /api/lovely-actions call: HTTP 503\n\nRoot-cause direction:\nCloudflare documents that JSON Schema mode can fail when the model cannot satisfy a requested schema. R18 used a deeply nested action schema with optional action-specific properties.\n\nR19 change:\n- Replaces only the planner's strict json_schema response_format with json_object mode.\n- Keeps the existing prompt requiring the exact planner envelope and exact catalog product names.\n- Keeps deterministic server-side normalization, catalog resolution, grounding, quantity validation, fulfilment validation and handoff checks before any browser mutation.\n- Keeps the browser deterministic action executor as the final mutation authority.\n- Bumps build and service-worker cache generation.\n- Retains R18 and R17 manifests for rollback.\n'''
