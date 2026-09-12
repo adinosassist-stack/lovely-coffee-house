@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-r18:
@@ -106,7 +106,6 @@ jobs:
           Path('release/R18_PLANNER_JSON_HARDENING_REPORT.txt').write_text(report)
           PY
 
-          # Seal the exact 50-file site tree.
           find site -type f -print0 | sort -z | xargs -0 sha256sum | sed 's#  site/#  #' > release/r18-site.sha256
           test "$(wc -l < release/r18-site.sha256)" -eq 50
           (cd site && sha256sum -c ../release/r18-site.sha256)
@@ -134,19 +133,13 @@ jobs:
 
           verify_old = Path('.github/workflows/verify-r17-source.yml')
           verify = verify_old.read_text()
-          verify = verify.replace('R17', 'R18').replace('r17', 'r18').replace(old_build, new_build)
+          verify = verify.replace(old_build, new_build).replace('R17', 'R18').replace('r17', 'r18')
           verify_new = Path('.github/workflows/verify-r18-source.yml')
           verify_new.write_text(verify)
-          verify_old.unlink()
 
           Path('README.md').write_text(f'''# Lovely Coffee House\n\nProduction source repository for [lovelycoffeehouse.com](https://lovelycoffeehouse.com).\n\n## Current production candidate\n\n- Release: **R18 — Planner JSON Hardening**\n- Build: `{new_build}`\n- Cloudflare Pages project: `lovelycoffeehouse`\n- Sealed site manifest: `release/r18-site.sha256` (50 files)\n- Rollback manifest retained: `release/r17-site.sha256`\n- Workers AI binding: `AI`\n\nR18 preserves the R17 deterministic commerce validation layer and hardens the structured action planner with Cloudflare Workers AI JSON-schema output. Production deployment is guarded by exact source checksums, runtime AI checks, planner smoke tests, and custom-domain build verification.\n''')
           PY
 
-          # Remove one-off diagnostic/build machinery from the sealed release commit.
-          rm -f .github/workflows/diagnose-r17-ai.yml
-          rm -f .github/workflows/build-r18-hotfix.yml
-
-          # Three release gates.
           echo 'PASS 1/3: syntax + exact 50-file checksum validation'
           node --check site/_worker.js
           (cd site && sha256sum -c ../release/r18-site.sha256 >/dev/null)
@@ -164,13 +157,17 @@ jobs:
           grep -q 'lovely-live-source-r18-planner-json-mode-20260912-r18' .github/workflows/deploy-production.yml
           grep -q 'lovely-live-source-r18-planner-json-mode-20260912-r18' .github/workflows/verify-r18-source.yml
 
-      - name: Commit sealed R18 and trigger guarded production deploy
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'adinosassist-stack'
-          git config user.email 'adinosassist@gmail.com'
-          git add -A
-          git diff --cached --check
-          git commit -m 'Seal R18 planner JSON hardening and deploy [deploy]'
-          git push origin HEAD:main
+          mkdir -p r18-artifact/site r18-artifact/release r18-artifact/.github/workflows
+          cp site/_worker.js site/build-info.json site/sw.js r18-artifact/site/
+          cp release/r18-site.sha256 release/R18_PLANNER_JSON_HARDENING_REPORT.txt r18-artifact/release/
+          cp .github/workflows/deploy-production.yml .github/workflows/verify-r18-source.yml r18-artifact/.github/workflows/
+          cp README.md r18-artifact/README.md
+          printf '%s\n' '.github/workflows/verify-r17-source.yml' '.github/workflows/diagnose-r17-ai.yml' '.github/workflows/build-r18-hotfix.yml' '.github/workflows/repair-r18-builder.yml' > r18-artifact/DELETE_PATHS.txt
+
+      - name: Upload sealed R18 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lovely-coffee-house-r18-sealed
+          path: r18-artifact
+          if-no-files-found: error
+          retention-days: 7
