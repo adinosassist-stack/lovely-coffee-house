@@ -1,0 +1,41 @@
+name: Verify sealed R20 source
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lovely-coffee-house-r20-integrity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-source:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Verify exact sealed R20 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(wc -l < release/r20-site.sha256)" -eq 50
+          test "$(find site -type f | wc -l)" -eq 50
+          (cd site && sha256sum -c ../release/r20-site.sha256)
+          node --check site/_worker.js
+          grep -q "response_format: { type: 'json_object' }" site/_worker.js
+          ! grep -q "type: 'json_schema'" site/_worker.js
+          grep -q 'X-Lovely-Build: lovely-live-source-r20-header-consistency-20260912-r20' site/_headers
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const info = JSON.parse(fs.readFileSync('site/build-info.json','utf8'));
+          if (info.build !== 'lovely-live-source-r20-header-consistency-20260912-r20') throw new Error(`Unexpected build ${info.build}`);
+          if (info.ai_binding !== 'AI') throw new Error('AI binding metadata mismatch');
+          console.log(`Verified ${info.build}`);
+          NODE
