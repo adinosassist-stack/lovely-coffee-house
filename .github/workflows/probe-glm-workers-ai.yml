@@ -41,31 +41,13 @@ jobs:
           cp site/_worker.js "$RUNNER_TEMP/original-worker.js"
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('site/_worker.js')
-          t=p.read_text()
-          old="""async function handleStatus({ env }) {
-  const ai = await probeAi(env);
-  return apiJson({ ai });
-}"""
-          new="""async function handleStatus({ env }) {
-  const binding = Boolean(env && env.AI && typeof env.AI.run === 'function');
-  if (!binding) return apiJson({ ai:false, binding:false, reason:'binding_missing' });
-  try {
-    const result = await env.AI.run('@cf/meta/llama-3.1-8b-instruct-fast', {
-      messages: [{ role:'user', content:'Reply OK.' }],
-      max_tokens: 2,
-      temperature: 0,
-    });
-    return apiJson({ ai:Boolean(result), binding:true, reason:result ? 'ok' : 'empty_result' });
-  } catch (error) {
-    const code = String((error && (error.code || error.status)) || '').slice(0,40);
-    const message = String((error && error.message) || (error && error.name) || 'runtime_error').replace(/[\\r\\n]+/g,' ').slice(0,220);
-    return apiJson({ ai:false, binding:true, reason:'runtime_error', code, message });
-  }
-}"""
+          p = Path('site/_worker.js')
+          t = p.read_text()
+          old = "async function handleStatus({ env }) {\n  const ai = await probeAi(env);\n  return apiJson({ ai });\n}"
+          new = "async function handleStatus({ env }) {\n  const binding = Boolean(env && env.AI && typeof env.AI.run === 'function');\n  if (!binding) return apiJson({ ai:false, binding:false, reason:'binding_missing' });\n  try {\n    const result = await env.AI.run('@cf/meta/llama-3.1-8b-instruct-fast', { messages: [{ role:'user', content:'Reply OK.' }], max_tokens: 2, temperature: 0 });\n    return apiJson({ ai:Boolean(result), binding:true, reason:result ? 'ok' : 'empty_result' });\n  } catch (error) {\n    const code = String((error && (error.code || error.status)) || '').slice(0,40);\n    const message = String((error && error.message) || (error && error.name) || 'runtime_error').replace(/[\\r\\n]+/g,' ').slice(0,220);\n    return apiJson({ ai:false, binding:true, reason:'runtime_error', code, message });\n  }\n}"
           if old not in t:
               raise SystemExit('handleStatus target not found')
-          p.write_text(t.replace(old,new,1))
+          p.write_text(t.replace(old, new, 1))
           PY
           node --check site/_worker.js
 
