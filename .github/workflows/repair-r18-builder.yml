@@ -1,0 +1,34 @@
+name: Repair R18 builder
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: contains(github.event.head_commit.message, '[repair-r18-builder]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Repair replacement order and retrigger R18 build
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/build-r18-hotfix.yml')
+          text = p.read_text()
+          old = "verify = verify.replace('R17', 'R18').replace('r17', 'r18').replace(old_build, new_build)"
+          new = "verify = verify.replace(old_build, new_build).replace('R17', 'R18').replace('r17', 'r18')"
+          assert text.count(old) == 1
+          p.write_text(text.replace(old, new, 1))
+          PY
+          rm -f .github/workflows/repair-r18-builder.yml
+          git config user.name 'adinosassist-stack'
+          git config user.email 'adinosassist@gmail.com'
+          git add -A
+          git commit -m 'Fix R18 builder replacement order [build-r18]'
+          git push origin HEAD:main
