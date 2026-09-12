@@ -126,7 +126,6 @@ jobs:
           set -euo pipefail
           log="$RUNNER_TEMP/wrangler-deploy.log"
           npx --yes "wrangler@${WRANGLER_VERSION}" pages deploy site \
-            --config wrangler.toml \
             --project-name="$CLOUDFLARE_PROJECT" \
             --commit-hash="$GITHUB_SHA" \
             --commit-message="GitHub production ${GITHUB_SHA} ${EXPECTED_BUILD}" 2>&1 | tee "$log"
