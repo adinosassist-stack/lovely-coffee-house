@@ -7,7 +7,6 @@ on:
   push:
     branches:
       - main
-      - bootstrap/r17-github-deploy-20260912
   workflow_dispatch:
 
 permissions:
