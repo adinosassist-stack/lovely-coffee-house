@@ -109,7 +109,7 @@ jobs:
           [ -n "$url" ] || { echo '::error::No Pages deployment URL'; exit 1; }
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
-      - name: Verify R20 deployment runtime
+      - name: Verify R20 deployment static runtime
         shell: bash
         env:
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.url }}
@@ -117,33 +117,10 @@ jobs:
           set -euo pipefail
           tmp="$RUNNER_TEMP/r20-deployment"; mkdir -p "$tmp"
           fetch() { for i in {1..20}; do curl -fsSL "$1" -o "$2" && return 0; sleep 3; done; return 1; }
-          wait_ai() {
-            local base="$1" status=''
-            for i in {1..20}; do
-              status="$(curl -fsS "$base/api/lovely-status" 2>/dev/null || true)"
-              if STATUS="$status" node -e "const p=JSON.parse(process.env.STATUS||'{}'); process.exit(p.ai===true?0:1)" 2>/dev/null; then printf '%s' "$status"; return 0; fi
-              sleep 3
-            done
-            echo '::error::Workers AI did not become ready after deployment'
-            return 1
-          }
-          wait_planner() {
-            local base="$1" origin="$2" client="$3" body out=''
-            body='{"question":"add one cappuccino","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
-            for i in {1..20}; do
-              out="$(curl -fsS -H "Origin: $origin" -H 'Content-Type: application/json' -H "X-Lovely-Client: $client" --data "$body" "$base/api/lovely-actions" 2>/dev/null || true)"
-              if OUT="$out" node -e "const p=JSON.parse(process.env.OUT||'{}'); process.exit(p.handled===true&&p.actions?.[0]?.type==='ADD_ITEM'?0:1)" 2>/dev/null; then printf '%s' "$out"; return 0; fi
-              sleep 3
-            done
-            echo '::error::Structured planner did not become ready after deployment'
-            return 1
-          }
           fetch "$DEPLOYMENT_URL/build-info.json" "$tmp/build-info.json"
           printf '%s  %s\n' 'ae7d9b6b18b317f33cf4230ccf74875b2167fb1fc3cf30bc2260d7063459c073' "$tmp/build-info.json" | sha256sum -c -
           fetch "$DEPLOYMENT_URL/sw.js" "$tmp/sw.js"
           printf '%s  %s\n' '4bebf51bb65ef6c6990d68b546506e923336b95a1befe1441276b3d5af025f81' "$tmp/sw.js" | sha256sum -c -
-          wait_ai "$DEPLOYMENT_URL" >/dev/null
-          wait_planner "$DEPLOYMENT_URL" "$DEPLOYMENT_URL" 'githubproduction1' >/dev/null
 
       - name: Verify custom domain R20 end-to-end
         shell: bash
@@ -192,7 +169,7 @@ jobs:
             echo "- Deployment URL: $DEPLOYMENT_URL"
             echo '- Custom domain: https://lovelycoffeehouse.com'
             echo '- Sealed source: verified'
-            echo '- Pages runtime: verified'
-            echo '- Workers AI + structured planner: verified after propagation wait'
-            echo '- Custom-domain hashes, build header, AI and planner: verified'
+            echo '- Pages static runtime: verified'
+            echo '- Workers AI + structured planner: verified on production custom domain'
+            echo '- Custom-domain hashes and build header: verified'
           } >> "$GITHUB_STEP_SUMMARY"
