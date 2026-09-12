@@ -33,11 +33,51 @@ jobs:
             const cfg=r.deployment_configs?.[envName]||{};
             const ai=cfg.ai_bindings||{};
             console.log(`${envName}_ai_binding_names=${Object.keys(ai).join(',')||'none'}`);
-            for(const [name,v] of Object.entries(ai)) console.log(`${envName}_ai_${name}_project_id=${v?.project_id||'none'}`);
+            for(const [name,v] of Object.entries(ai)) {
+              console.log(`${envName}_ai_${name}_value=${JSON.stringify(v||{})}`);
+            }
             console.log(`${envName}_compatibility_date=${cfg.compatibility_date||'none'}`);
           }
           console.log('latest_deployment_id='+(r.latest_deployment?.id||'none'));
           console.log('latest_deployment_environment='+(r.latest_deployment?.environment||'none'));
+          NODE
+
+      - name: Test Workers AI account runtime directly
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          token="$(printf '%s' "$CLOUDFLARE_API_TOKEN" | tr -d '\r\n')"
+          acct="$(printf '%s' "$CLOUDFLARE_ACCOUNT_ID" | tr -d '[:space:]')"
+          api='https://api.cloudflare.com/client/v4'
+          out="$RUNNER_TEMP/ai-direct.json"
+          code="$(curl -sS -o "$out" -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $token" \
+            -H 'Content-Type: application/json' \
+            --data '{"messages":[{"role":"user","content":"Reply OK."}],"max_tokens":2,"temperature":0}' \
+            "$api/accounts/$acct/ai/run/@cf/meta/llama-3.1-8b-instruct-fast")"
+          echo "direct_ai_http=$code"
+          AI_RESULT="$(cat "$out")" node - <<'NODE'
+          const p=JSON.parse(process.env.AI_RESULT||'{}');
+          console.log('direct_ai_success='+(p.success===true));
+          for(const e of p.errors||[]) console.log(`direct_ai_error=${e.code||'unknown'}:${e.message||'unknown'}`);
+          const result=p.result;
+          if(result && typeof result==='object') console.log('direct_ai_result_keys='+Object.keys(result).join(','));
+          NODE
+
+      - name: Inspect live custom-domain AI status
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$RUNNER_TEMP/status.json"
+          code="$(curl -sS -o "$body" -w '%{http_code}' 'https://lovelycoffeehouse.com/api/lovely-status')"
+          echo "custom_status_http=$code"
+          STATUS="$(cat "$body")" node - <<'NODE'
+          let p={};try{p=JSON.parse(process.env.STATUS||'{}')}catch(_){}
+          console.log('custom_status_ai='+(p.ai===true));
+          console.log('custom_status_keys='+Object.keys(p).join(','));
           NODE
 
       - name: Inspect downloaded Wrangler AI sections
