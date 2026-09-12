@@ -1,0 +1,200 @@
+name: Lovely Coffee House Production Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lovely-coffee-house-production
+  cancel-in-progress: false
+
+env:
+  CLOUDFLARE_PROJECT: lovelycoffeehouse
+  WRANGLER_VERSION: 4.131.0
+  EXPECTED_BUILD: lovely-live-source-r17-structured-action-planner-20260911-r17
+
+jobs:
+  deploy-production:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[deploy]'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact production candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Re-verify sealed R17 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d site
+          test -f release/r17-site.sha256
+          test "$(wc -l < release/r17-site.sha256)" -eq 50
+          test "$(find site -type f | wc -l)" -eq 50
+          (cd site && sha256sum -c ../release/r17-site.sha256)
+          node --check site/_worker.js
+          find site/assets -type f -name '*.js' -print0 | xargs -0 -r -n1 node --check
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const info = JSON.parse(fs.readFileSync('site/build-info.json', 'utf8'));
+          const expected = process.env.EXPECTED_BUILD;
+          if (info.build !== expected) throw new Error(`Unexpected build: ${info.build}`);
+          if (info.ai_binding !== 'AI') throw new Error(`Unexpected AI binding: ${info.ai_binding}`);
+          if (info.deploymentForm !== 'single-file-worker-direct-upload') throw new Error(`Unexpected deployment form: ${info.deploymentForm}`);
+          console.log(`Production candidate verified: ${info.build}`);
+          NODE
+
+      - name: Validate Cloudflare production credentials
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo '::error::Missing GitHub Actions secret CLOUDFLARE_API_TOKEN'
+            exit 1
+          fi
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo '::error::Missing GitHub Actions secret CLOUDFLARE_ACCOUNT_ID'
+            exit 1
+          fi
+
+      - name: Qualify Cloudflare Pages target
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          node --version
+          npx --yes "wrangler@${WRANGLER_VERSION}" --version
+          npx --yes "wrangler@${WRANGLER_VERSION}" pages project list | tee "$RUNNER_TEMP/pages-projects.txt"
+          grep -F "$CLOUDFLARE_PROJECT" "$RUNNER_TEMP/pages-projects.txt" >/dev/null || {
+            echo "::error::Cloudflare Pages project '$CLOUDFLARE_PROJECT' is not visible to the configured token/account"
+            exit 1
+          }
+
+      - name: Deploy exact R17 source to Cloudflare Pages
+        id: deploy
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/wrangler-deploy.log"
+          npx --yes "wrangler@${WRANGLER_VERSION}" pages deploy site \
+            --project-name="$CLOUDFLARE_PROJECT" \
+            --branch=main \
+            --commit-hash="$GITHUB_SHA" \
+            --commit-message="GitHub production ${GITHUB_SHA} ${EXPECTED_BUILD}" 2>&1 | tee "$log"
+          deployment_url="$(grep -Eo 'https://[A-Za-z0-9.-]+\.pages\.dev' "$log" | tail -n 1 || true)"
+          if [ -z "$deployment_url" ]; then
+            echo '::error::Wrangler completed without a parseable Pages deployment URL'
+            exit 1
+          fi
+          echo "url=$deployment_url" >> "$GITHUB_OUTPUT"
+          echo "Cloudflare deployment URL: $deployment_url"
+
+      - name: Verify deployment-specific R17 runtime
+        shell: bash
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          set -euo pipefail
+          tmp="$RUNNER_TEMP/lovely-production-smoke"
+          mkdir -p "$tmp"
+
+          curl --fail --silent --show-error --location --retry 5 --retry-delay 2 \
+            "$DEPLOYMENT_URL/build-info.json" -o "$tmp/build-info.json"
+          printf '%s  %s\n' 'f6bad5f1b54780a7d1ac9bb77ddd6215d0431ccc3fe0527f77bf5d630b4ad32a' "$tmp/build-info.json" | sha256sum -c -
+
+          curl --fail --silent --show-error --location --retry 5 --retry-delay 2 \
+            "$DEPLOYMENT_URL/sw.js" -o "$tmp/sw.js"
+          printf '%s  %s\n' 'd10f722ce5171ef4907b5c06798cf641ae40e62db200804ddb6a588984c69f06' "$tmp/sw.js" | sha256sum -c -
+
+          curl --fail --silent --show-error --location --retry 5 --retry-delay 2 \
+            "$DEPLOYMENT_URL/assets/lovely-ai.8f169dbb9daf.js" -o "$tmp/lovely-ai.js"
+          printf '%s  %s\n' '8f169dbb9daf4c87badf614108443e71e2dc8732c684540b0a164723c8ff853c' "$tmp/lovely-ai.js" | sha256sum -c -
+
+          status_json=''
+          for attempt in 1 2 3; do
+            if status_json="$(curl --fail --silent --show-error --retry 2 --retry-delay 2 "$DEPLOYMENT_URL/api/lovely-status")"; then
+              break
+            fi
+            sleep 2
+          done
+          STATUS_JSON="$status_json" node - <<'NODE'
+          const payload = JSON.parse(process.env.STATUS_JSON || '{}');
+          if (payload.ai !== true) throw new Error(`Workers AI is not ready: ${JSON.stringify(payload)}`);
+          console.log('Workers AI status: ready');
+          NODE
+
+          planner_payload='{"question":"add one cappuccino","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
+          planner_json=''
+          for attempt in 1 2 3; do
+            if planner_json="$(curl --fail --silent --show-error \
+              -H "Origin: $DEPLOYMENT_URL" \
+              -H 'Content-Type: application/json' \
+              -H 'X-Lovely-Client: githubproduction1' \
+              --data "$planner_payload" \
+              "$DEPLOYMENT_URL/api/lovely-actions")"; then
+              break
+            fi
+            sleep 2
+          done
+          PLANNER_JSON="$planner_json" node - <<'NODE'
+          const payload = JSON.parse(process.env.PLANNER_JSON || '{}');
+          if (payload.handled !== true || !Array.isArray(payload.actions) || payload.actions.length < 1) {
+            throw new Error(`Structured action planner smoke test failed: ${JSON.stringify(payload)}`);
+          }
+          if (payload.actions[0]?.type !== 'ADD_ITEM') {
+            throw new Error(`Unexpected planner action: ${JSON.stringify(payload)}`);
+          }
+          console.log('Structured action planner: ready');
+          NODE
+
+      - name: Verify custom production domain assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$RUNNER_TEMP/lovely-custom-domain-smoke"
+          mkdir -p "$tmp"
+
+          curl --fail --silent --show-error --location --retry 5 --retry-delay 2 \
+            'https://lovelycoffeehouse.com/robots.txt' -o "$tmp/robots.txt"
+          printf '%s  %s\n' '92eac92c256c998178345aa7f99477a2a63223c6091a840607d59e3c98fe3303' "$tmp/robots.txt" | sha256sum -c -
+
+          curl --fail --silent --show-error --location --retry 5 --retry-delay 2 \
+            'https://lovelycoffeehouse.com/sw.js' -o "$tmp/sw.js"
+          printf '%s  %s\n' 'd10f722ce5171ef4907b5c06798cf641ae40e62db200804ddb6a588984c69f06' "$tmp/sw.js" | sha256sum -c -
+
+          headers="$(curl --fail --silent --show-error --head --retry 5 --retry-delay 2 'https://lovelycoffeehouse.com/robots.txt')"
+          printf '%s\n' "$headers" | tr -d '\r' | grep -iF "x-lovely-build: $EXPECTED_BUILD" >/dev/null || {
+            echo '::error::Production custom domain did not expose the expected X-Lovely-Build header'
+            exit 1
+          }
+
+      - name: Production deployment summary
+        shell: bash
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          {
+            echo '### Lovely Coffee House production deployment'
+            echo "- Git SHA: \`$GITHUB_SHA\`"
+            echo "- Build: \`$EXPECTED_BUILD\`"
+            echo "- Cloudflare project: \`$CLOUDFLARE_PROJECT\`"
+            echo "- Deployment URL: $DEPLOYMENT_URL"
+            echo '- Custom domain: https://lovelycoffeehouse.com'
+            echo '- Sealed source: verified'
+            echo '- Workers AI: verified'
+            echo '- Structured action planner: verified'
+            echo '- Custom-domain R17 assets: verified'
+          } >> "$GITHUB_STEP_SUMMARY"
