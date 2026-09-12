@@ -12,79 +12,27 @@ jobs:
     if: contains(github.event.head_commit.message, '[diag-r20-custom]')
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect Cloudflare zone security access
+      - name: Map challenge scope by path
         shell: bash
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-          api='https://api.cloudflare.com/client/v4'
-          token="$(printf '%s' "$CLOUDFLARE_API_TOKEN" | tr -d '\r\n')"
-          acct="$(printf '%s' "$CLOUDFLARE_ACCOUNT_ID" | tr -d '[:space:]')"
-          hdr=( -H "Authorization: Bearer $token" )
+          probe() {
+            local label="$1" url="$2"; shift 2
+            local hdr="$RUNNER_TEMP/$label.hdr" body="$RUNNER_TEMP/$label.body"
+            local code
+            code="$(curl -sS -D "$hdr" -o "$body" -w '%{http_code}' "$@" "$url" || true)"
+            local mitigated='no'
+            grep -qi '^cf-mitigated: challenge' "$hdr" && mitigated='yes'
+            local ctype
+            ctype="$(grep -i '^content-type:' "$hdr" | tail -n1 | tr -d '\r' | cut -d' ' -f2- || true)"
+            echo "$label http=$code challenge=$mitigated content_type=${ctype:-none}"
+          }
 
-          zones="$RUNNER_TEMP/zones.json"
-          code="$(curl -sS -o "$zones" -w '%{http_code}' "${hdr[@]}" "$api/zones?name=lovelycoffeehouse.com&account.id=$acct")"
-          echo "zones_lookup_http=$code"
-          if [ "$code" != 200 ]; then
-            ZONES="$(cat "$zones")" node - <<'NODE'
-          const p=JSON.parse(process.env.ZONES||'{}');
-          console.log('zones_success='+(p.success===true));
-          for(const e of p.errors||[]) console.log(`zones_error=${e.code}:${e.message}`);
-          NODE
-            exit 0
-          fi
-
-          ZONES="$(cat "$zones")" node - <<'NODE' > "$RUNNER_TEMP/zone.env"
-          const p=JSON.parse(process.env.ZONES||'{}');
-          const z=(p.result||[]).find(x=>x.name==='lovelycoffeehouse.com');
-          if(!z) process.exit(2);
-          console.log(`ZONE_ID=${z.id}`);
-          console.error(`zone_status=${z.status}; zone_plan=${z.plan?.name||'unknown'}`);
-          NODE
-          source "$RUNNER_TEMP/zone.env"
-
-          for setting in browser_check security_level challenge_ttl; do
-            out="$RUNNER_TEMP/$setting.json"
-            c="$(curl -sS -o "$out" -w '%{http_code}' "${hdr[@]}" "$api/zones/$ZONE_ID/settings/$setting")"
-            echo "setting_${setting}_http=$c"
-            if [ "$c" = 200 ]; then
-              SETTING="$(cat "$out")" SETTING_ID="$setting" node - <<'NODE'
-          const p=JSON.parse(process.env.SETTING||'{}');
-          console.log(`${process.env.SETTING_ID}=${JSON.stringify(p.result?.value)}`);
-          NODE
-            else
-              SETTING="$(cat "$out")" SETTING_ID="$setting" node - <<'NODE'
-          const p=JSON.parse(process.env.SETTING||'{}'); for(const e of p.errors||[]) console.log(`${process.env.SETTING_ID}_error=${e.code}:${e.message}`);
-          NODE
-            fi
-          done
-
-          bot="$RUNNER_TEMP/bot.json"
-          c="$(curl -sS -o "$bot" -w '%{http_code}' "${hdr[@]}" "$api/zones/$ZONE_ID/bot_management")"
-          echo "bot_management_http=$c"
-          if [ "$c" = 200 ]; then
-            BOT="$(cat "$bot")" node - <<'NODE'
-          const p=JSON.parse(process.env.BOT||'{}'); const r=p.result||{};
-          for(const k of ['fight_mode','sbfm_likely_automated','sbfm_definitely_automated','sbfm_static_resource_protection','sbfm_verified_bots','enable_js','content_bots_protection']) if(k in r) console.log(`${k}=${JSON.stringify(r[k])}`);
-          if(r.stale_zone_configuration) console.log(`stale_zone_configuration=${JSON.stringify(r.stale_zone_configuration)}`);
-          NODE
-          else
-            BOT="$(cat "$bot")" node - <<'NODE'
-          const p=JSON.parse(process.env.BOT||'{}'); for(const e of p.errors||[]) console.log(`bot_error=${e.code}:${e.message}`);
-          NODE
-          fi
-
-          rules="$RUNNER_TEMP/rulesets.json"
-          c="$(curl -sS -o "$rules" -w '%{http_code}' "${hdr[@]}" "$api/zones/$ZONE_ID/rulesets")"
-          echo "rulesets_http=$c"
-          if [ "$c" = 200 ]; then
-            RULES="$(cat "$rules")" node - <<'NODE'
-          const p=JSON.parse(process.env.RULES||'{}'); for(const r of p.result||[]) if(['http_request_firewall_custom','http_request_firewall_managed','http_request_sbfm'].includes(r.phase)) console.log(`ruleset=${r.phase}:${r.id}:${r.name}`);
-          NODE
-          else
-            RULES="$(cat "$rules")" node - <<'NODE'
-          const p=JSON.parse(process.env.RULES||'{}'); for(const e of p.errors||[]) console.log(`rulesets_error=${e.code}:${e.message}`);
-          NODE
-          fi
+          base='https://lovelycoffeehouse.com'
+          probe home "$base/"
+          probe robots "$base/robots.txt?diag=scope"
+          probe missing "$base/definitely-not-a-real-page-r20"
+          probe api_missing "$base/api/not-a-real-route-r20"
+          probe status "$base/api/lovely-status"
+          probe status_origin "$base/api/lovely-status" -H 'Origin: https://lovelycoffeehouse.com' -H 'Sec-Fetch-Site: same-origin' -H 'Sec-Fetch-Mode: cors' -H 'User-Agent: Mozilla/5.0'
+          probe planner_options "$base/api/lovely-actions" -X OPTIONS -H 'Origin: https://lovelycoffeehouse.com' -H 'Access-Control-Request-Method: POST' -H 'Sec-Fetch-Site: same-origin' -H 'User-Agent: Mozilla/5.0'
