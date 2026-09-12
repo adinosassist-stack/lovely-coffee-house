@@ -82,17 +82,17 @@ jobs:
           p = Path('wrangler.toml')
           t = p.read_text()
           line = 'pages_build_output_dir = "./site"'
-          t = re.sub(r'^\s*pages_build_output_dir\s*=.*$', line, t, flags=re.M) if re.search(r'^\s*pages_build_output_dir\s*=.*$', t, flags=re.M) else line + '\n' + t
+          t = re.sub(r'^[ \t]*pages_build_output_dir[ \t]*=.*$', line, t, flags=re.M) if re.search(r'^[ \t]*pages_build_output_dir[ \t]*=.*$', t, flags=re.M) else line + '\n' + t
           def bind(text, table):
-              pat = rf'^\s*\[{re.escape(table)}\]\s*$'
+              pat = rf'^[ \t]*\[{re.escape(table)}\][ \t]*$'
               if not re.search(pat, text, flags=re.M): return text.rstrip() + f'\n\n[{table}]\nbinding = "AI"\n'
               m = re.search(pat, text, flags=re.M); start = m.end()
-              n = re.search(r'^\s*\[[^\]]+\]\s*$', text[start:], flags=re.M); end = start + n.start() if n else len(text)
+              n = re.search(r'^[ \t]*\[[^\]]+\][ \t]*$', text[start:], flags=re.M); end = start + n.start() if n else len(text)
               body = text[start:end]
-              body = re.sub(r'^\s*binding\s*=.*$', 'binding = "AI"', body, count=1, flags=re.M) if re.search(r'^\s*binding\s*=.*$', body, flags=re.M) else '\nbinding = "AI"' + body
+              body = re.sub(r'^[ \t]*binding[ \t]*=.*$', 'binding = "AI"', body, count=1, flags=re.M) if re.search(r'^[ \t]*binding[ \t]*=.*$', body, flags=re.M) else '\nbinding = "AI"' + body
               return text[:start] + body + text[end:]
           t = bind(t, 'ai')
-          if re.search(r'^\s*\[env\.production\]\s*$', t, flags=re.M): t = bind(t, 'env.production.ai')
+          if re.search(r'^[ \t]*\[env\.production\][ \t]*$', t, flags=re.M): t = bind(t, 'env.production.ai')
           p.write_text(t)
           PY
           grep -q '^\[ai\]$' wrangler.toml
@@ -104,7 +104,7 @@ jobs:
         run: |
           set -euo pipefail
           log="$RUNNER_TEMP/deploy.log"
-          npx --yes "wrangler@${WRANGLER_VERSION}" pages deploy site --project-name="$CLOUDFLARE_PROJECT" --commit-hash="$GITHUB_SHA" --commit-message="GitHub production $GITHUB_SHA $EXPECTED_BUILD" 2>&1 | tee "$log"
+          npx --yes "wrangler@${WRANGLER_VERSION}" pages deploy site --project-name="$CLOUDFLARE_PROJECT" --branch=main --commit-hash="$GITHUB_SHA" --commit-message="GitHub production $GITHUB_SHA $EXPECTED_BUILD" 2>&1 | tee "$log"
           url="$(grep -Eo 'https://[A-Za-z0-9.-]+\.pages\.dev' "$log" | tail -n1 || true)"
           [ -n "$url" ] || { echo '::error::No Pages deployment URL'; exit 1; }
           echo "url=$url" >> "$GITHUB_OUTPUT"
@@ -134,7 +134,7 @@ jobs:
               if STATUS="$status" node -e "const p=JSON.parse(process.env.STATUS||'{}'); process.exit(p.ai===true?0:1)" 2>/dev/null; then return 0; fi
               sleep 3
             done
-            echo '::error::Custom-domain Workers AI did not become ready'
+            echo '::error::Custom-domain Workers AI binding did not become ready'
             return 1
           }
           wait_planner() {
@@ -145,7 +145,7 @@ jobs:
               if OUT="$out" node -e "const p=JSON.parse(process.env.OUT||'{}'); process.exit(p.handled===true&&p.actions?.[0]?.type==='ADD_ITEM'?0:1)" 2>/dev/null; then return 0; fi
               sleep 3
             done
-            echo '::error::Custom-domain planner did not become ready'
+            echo '::error::Custom-domain Workers AI planner did not become ready'
             return 1
           }
           curl -fsSL --retry 10 --retry-delay 3 'https://lovelycoffeehouse.com/robots.txt' -o "$tmp/robots.txt"
@@ -170,6 +170,6 @@ jobs:
             echo '- Custom domain: https://lovelycoffeehouse.com'
             echo '- Sealed source: verified'
             echo '- Pages static runtime: verified'
-            echo '- Workers AI + structured planner: verified on production custom domain'
+            echo '- Workers AI binding + structured planner: verified on production custom domain'
             echo '- Custom-domain hashes and build header: verified'
           } >> "$GITHUB_STEP_SUMMARY"

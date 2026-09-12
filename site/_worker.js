@@ -1308,11 +1308,12 @@ return { handleAi, handleActions };
 
 /* ===== worker/routes/status.js ===== */
 const M_worker_routes_status = (() => {
-const { probeAi } = M_worker_lib_ai;
+const { aiBindingReady } = M_worker_lib_ai;
 const { apiJson } = M_worker_lib_security;
 async function handleStatus({ env }) {
-  const ai = await probeAi(env);
-  return apiJson({ ai });
+  // Status checks must never spend Workers AI neurons. Runtime health is verified
+  // by an actual planner request in the production gate instead.
+  return apiJson({ ai: aiBindingReady(env), runtime: 'unchecked' });
 }
 return { handleStatus };
 })();
