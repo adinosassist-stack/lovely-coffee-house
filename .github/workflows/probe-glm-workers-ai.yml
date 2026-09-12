@@ -1,0 +1,100 @@
+name: Probe GLM Workers AI
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  probe-glm:
+    if: contains(github.event.head_commit.message, '[probe-glm]')
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_PROJECT: lovelycoffeehouse
+      WRANGLER_VERSION: 4.131.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Prepare production Pages config
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          CLOUDFLARE_API_TOKEN="$(printf '%s' "$CLOUDFLARE_API_TOKEN" | tr -d '\r\n')"
+          CLOUDFLARE_ACCOUNT_ID="$(printf '%s' "$CLOUDFLARE_ACCOUNT_ID" | tr -d '[:space:]')"
+          export CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
+          rm -f wrangler.toml wrangler.json wrangler.jsonc
+          npx --yes "wrangler@${WRANGLER_VERSION}" pages download config "$CLOUDFLARE_PROJECT" --force
+          printf '\n[ai]\nbinding = "AI"\n' >> wrangler.toml
+          grep -q '^\[env\.production\.ai\]$' wrangler.toml
+          grep -q '^\[ai\]$' wrangler.toml
+
+      - name: Swap text model to GLM 4.7 Flash for probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp site/_worker.js "$RUNNER_TEMP/original-worker.js"
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('site/_worker.js')
+          t=p.read_text()
+          old="const AI_MODEL = '@cf/meta/llama-3.1-8b-instruct-fast';"
+          new="const AI_MODEL = '@cf/zai-org/glm-4.7-flash';"
+          if old not in t:
+              raise SystemExit('AI model line not found')
+          p.write_text(t.replace(old,new,1))
+          PY
+          node --check site/_worker.js
+          grep -q "@cf/zai-org/glm-4.7-flash" site/_worker.js
+
+      - name: Deploy GLM probe to production branch
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          CLOUDFLARE_API_TOKEN="$(printf '%s' "$CLOUDFLARE_API_TOKEN" | tr -d '\r\n')"
+          CLOUDFLARE_ACCOUNT_ID="$(printf '%s' "$CLOUDFLARE_ACCOUNT_ID" | tr -d '[:space:]')"
+          export CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
+          npx --yes "wrangler@${WRANGLER_VERSION}" pages deploy site --project-name="$CLOUDFLARE_PROJECT" --branch=main --commit-hash="$GITHUB_SHA" --commit-message="GLM Workers AI probe $GITHUB_SHA"
+
+      - name: Verify GLM on live custom domain
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in {1..20}; do
+            status="$(curl -fsS 'https://lovelycoffeehouse.com/api/lovely-status' 2>/dev/null || true)"
+            echo "attempt=$i status=$status"
+            if STATUS="$status" node -e "const p=JSON.parse(process.env.STATUS||'{}');process.exit(p.ai===true?0:1)" 2>/dev/null; then
+              body='{"question":"add one cappuccino","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
+              out="$(curl -fsS -H 'Origin: https://lovelycoffeehouse.com' -H 'Content-Type: application/json' -H 'X-Lovely-Client: githubglmprobe001' --data "$body" 'https://lovelycoffeehouse.com/api/lovely-actions' 2>/dev/null || true)"
+              echo "planner=$out"
+              OUT="$out" node -e "const p=JSON.parse(process.env.OUT||'{}');process.exit(p.handled===true&&p.actions?.[0]?.type==='ADD_ITEM'?0:1)"
+              echo 'glm_ok=true' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo 'glm_ok=false' >> "$GITHUB_OUTPUT"
+          exit 1
+
+      - name: Restore original worker if GLM probe fails
+        if: failure()
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/original-worker.js" site/_worker.js
+          CLOUDFLARE_API_TOKEN="$(printf '%s' "$CLOUDFLARE_API_TOKEN" | tr -d '\r\n')"
+          CLOUDFLARE_ACCOUNT_ID="$(printf '%s' "$CLOUDFLARE_ACCOUNT_ID" | tr -d '[:space:]')"
+          export CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
+          npx --yes "wrangler@${WRANGLER_VERSION}" pages deploy site --project-name="$CLOUDFLARE_PROJECT" --branch=main --commit-hash="$GITHUB_SHA" --commit-message="Restore original worker after GLM probe $GITHUB_SHA"
