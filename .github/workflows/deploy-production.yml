@@ -16,7 +16,7 @@ env:
   CLOUDFLARE_PROJECT: lovelycoffeehouse
   CLOUDFLARE_CUSTOM_DOMAIN: lovelycoffeehouse.com
   WRANGLER_VERSION: 4.131.0
-  EXPECTED_BUILD: lovely-live-source-r17-structured-action-planner-20260911-r17
+  EXPECTED_BUILD: lovely-live-source-r18-planner-json-mode-20260912-r18
 
 jobs:
   deploy-production:
@@ -28,15 +28,15 @@ jobs:
       - name: Checkout exact production candidate
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Re-verify sealed R17 source
+      - name: Re-verify sealed R18 source
         shell: bash
         run: |
           set -euo pipefail
           test -d site
-          test -f release/r17-site.sha256
-          test "$(wc -l < release/r17-site.sha256)" -eq 50
+          test -f release/r18-site.sha256
+          test "$(wc -l < release/r18-site.sha256)" -eq 50
           test "$(find site -type f | wc -l)" -eq 50
-          (cd site && sha256sum -c ../release/r17-site.sha256)
+          (cd site && sha256sum -c ../release/r18-site.sha256)
           node --check site/_worker.js
           find site/assets -type f -name '*.js' -print0 | xargs -0 -r -n1 node --check
           node - <<'NODE'
@@ -111,7 +111,6 @@ jobs:
               pattern = rf'^\s*\[{re.escape(table)}\]\s*$'
               if not re.search(pattern, text, flags=re.M):
                   return text.rstrip() + f'\n\n{header}\nbinding = "AI"\n'
-              # Replace/add binding only inside this table, before the next table header.
               m = re.search(pattern, text, flags=re.M)
               start = m.end()
               next_header = re.search(r'^\s*\[[^\]]+\]\s*$', text[start:], flags=re.M)
@@ -124,8 +123,6 @@ jobs:
               return text[:start] + body + text[end:]
 
           text = ensure_ai_table(text, 'ai')
-          # Cloudflare Pages downloaded config contains env.production; non-inheritable
-          # bindings must also be present in that environment.
           if re.search(r'^\s*\[env\.production\]\s*$', text, flags=re.M):
               text = ensure_ai_table(text, 'env.production.ai')
           path.write_text(text)
@@ -137,7 +134,7 @@ jobs:
           fi
           echo 'Existing Pages configuration preserved; Workers AI binding AI enabled for top-level and production environment.'
 
-      - name: Deploy exact R17 source to Cloudflare Pages production
+      - name: Deploy exact R18 source to Cloudflare Pages production
         id: deploy
         shell: bash
         run: |
@@ -152,7 +149,7 @@ jobs:
           echo "url=$deployment_url" >> "$GITHUB_OUTPUT"
           echo "Cloudflare production deployment URL: $deployment_url"
 
-      - name: Verify deployment-specific R17 runtime
+      - name: Verify deployment-specific R18 runtime
         shell: bash
         env:
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.url }}
@@ -169,9 +166,9 @@ jobs:
             return 1
           }
           fetch_ready "$DEPLOYMENT_URL/build-info.json" "$tmp/build-info.json"
-          printf '%s  %s\n' 'f6bad5f1b54780a7d1ac9bb77ddd6215d0431ccc3fe0527f77bf5d630b4ad32a' "$tmp/build-info.json" | sha256sum -c -
+          printf '%s  %s\n' '24e4047dedc93a42c5ae2be46c4beb7019810d310c6433453bc1693a08302d18' "$tmp/build-info.json" | sha256sum -c -
           fetch_ready "$DEPLOYMENT_URL/sw.js" "$tmp/sw.js"
-          printf '%s  %s\n' 'd10f722ce5171ef4907b5c06798cf641ae40e62db200804ddb6a588984c69f06' "$tmp/sw.js" | sha256sum -c -
+          printf '%s  %s\n' 'e30034a5465a62192313fe40d8ef672725faed48a15015cbe7226c9dd6ca9237' "$tmp/sw.js" | sha256sum -c -
           fetch_ready "$DEPLOYMENT_URL/assets/lovely-ai.8f169dbb9daf.js" "$tmp/lovely-ai.js"
           printf '%s  %s\n' '8f169dbb9daf4c87badf614108443e71e2dc8732c684540b0a164723c8ff853c' "$tmp/lovely-ai.js" | sha256sum -c -
 
@@ -200,7 +197,7 @@ jobs:
           console.log('Structured action planner: ready');
           NODE
 
-      - name: Verify custom production domain R17 assets
+      - name: Verify custom production domain R18 assets
         shell: bash
         run: |
           set -euo pipefail
@@ -209,7 +206,7 @@ jobs:
           curl --fail --silent --show-error --location --retry 5 --retry-delay 2 'https://lovelycoffeehouse.com/robots.txt' -o "$tmp/robots.txt"
           printf '%s  %s\n' '92eac92c256c998178345aa7f99477a2a63223c6091a840607d59e3c98fe3303' "$tmp/robots.txt" | sha256sum -c -
           curl --fail --silent --show-error --location --retry 5 --retry-delay 2 'https://lovelycoffeehouse.com/sw.js' -o "$tmp/sw.js"
-          printf '%s  %s\n' 'd10f722ce5171ef4907b5c06798cf641ae40e62db200804ddb6a588984c69f06' "$tmp/sw.js" | sha256sum -c -
+          printf '%s  %s\n' 'e30034a5465a62192313fe40d8ef672725faed48a15015cbe7226c9dd6ca9237' "$tmp/sw.js" | sha256sum -c -
           headers="$(curl --fail --silent --show-error --head --retry 5 --retry-delay 2 'https://lovelycoffeehouse.com/robots.txt')"
           printf '%s\n' "$headers" | tr -d '\r' | grep -iF "x-lovely-build: $EXPECTED_BUILD" >/dev/null || {
             echo '::error::Production custom domain did not expose the expected X-Lovely-Build header'
@@ -231,5 +228,5 @@ jobs:
             echo '- Sealed source: verified'
             echo '- Workers AI: verified'
             echo '- Structured action planner: verified'
-            echo '- Custom-domain R17 assets: verified'
+            echo '- Custom-domain R18 assets: verified'
           } >> "$GITHUB_STEP_SUMMARY"
