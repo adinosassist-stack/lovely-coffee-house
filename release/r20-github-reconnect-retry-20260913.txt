@@ -6,3 +6,4 @@ Previous diagnostic head: 09b4dfa15d448fd56c8757ce03589e7170ed6e0c
 Fresh production retry head: 45d7780a14c5fed87c99064f10495960b32787b4
 Production result: deploy/static integrity passed; custom-domain structured planner remained unavailable.
 Next action: run the existing one-shot Workers AI runtime diagnostic and auto-restore sealed R20.
+Automation quota recovery check: 2026-09-13T10:57:20Z
