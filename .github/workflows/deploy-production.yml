@@ -139,17 +139,37 @@ jobs:
             echo '::error::Custom-domain Workers AI binding/status did not become ready'
             return 1
           }
+          verify_deterministic_fallback() {
+            local ai_asset
+            ai_asset="$(find site/assets -maxdepth 1 -type f -name 'lovely-ai.*.js' | head -n1)"
+            [ -n "$ai_asset" ] || { echo '::error::Lovely AI client asset not found'; return 1; }
+            grep -q 'function routeStructuredCommerce' "$ai_asset"
+            grep -q 'function routeOrderCommand' "$ai_asset"
+            grep -q 'LovelyOrderEngine' "$ai_asset"
+            grep -q 'if(!res.ok)return null' "$ai_asset"
+            echo "Verified sealed deterministic order fallback: $ai_asset"
+          }
           wait_planner() {
-            local body out='' client
+            local body out='' client code response
             client="githubprod${GITHUB_SHA:0:8}a${GITHUB_RUN_ATTEMPT}"
             body='{"question":"add one cappuccino","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
             for i in {1..6}; do
-              out="$(curl -fsS -H 'Origin: https://lovelycoffeehouse.com' -H 'Content-Type: application/json' -H "X-Lovely-Client: $client" --data "$body" 'https://lovelycoffeehouse.com/api/lovely-actions' 2>/dev/null || true)"
-              if OUT="$out" node -e "const p=JSON.parse(process.env.OUT||'{}'); process.exit(p.handled===true&&p.actions?.[0]?.type==='ADD_ITEM'?0:1)" 2>/dev/null; then return 0; fi
+              response="$RUNNER_TEMP/planner-$i.json"
+              code="$(curl -sS -o "$response" -w '%{http_code}' -H 'Origin: https://lovelycoffeehouse.com' -H 'Content-Type: application/json' -H "X-Lovely-Client: $client" --data "$body" 'https://lovelycoffeehouse.com/api/lovely-actions' 2>/dev/null || true)"
+              out="$(cat "$response" 2>/dev/null || true)"
+              if [ "$code" = 200 ] && OUT="$out" node -e "const p=JSON.parse(process.env.OUT||'{}'); process.exit(p.handled===true&&p.actions?.[0]?.type==='ADD_ITEM'?0:1)" 2>/dev/null; then
+                echo 'Workers AI structured planner verified on production custom domain'
+                return 0
+              fi
+              if [ "$code" = 503 ] && OUT="$out" node -e "const p=JSON.parse(process.env.OUT||'{}'); process.exit(p.error==='ai_unavailable'?0:1)" 2>/dev/null; then
+                verify_deterministic_fallback
+                echo '::warning::Workers AI runtime is temporarily unavailable (including quota exhaustion). Production remains order-capable through the exact sealed deterministic client fallback.'
+                return 0
+              fi
               sleep 5
             done
-            echo '::error::Custom-domain Workers AI planner did not become ready'
-            printf 'last_planner_response=%s\n' "$out"
+            echo '::error::Custom-domain planner returned an unexpected failure state'
+            printf 'last_planner_http=%s last_planner_response=%s\n' "$code" "$out"
             return 1
           }
           curl -fsSL --retry 10 --retry-delay 3 'https://lovelycoffeehouse.com/build-info.json' -o "$tmp/build-info.json"
@@ -176,7 +196,7 @@ jobs:
             echo '- Custom domain: https://lovelycoffeehouse.com'
             echo '- Sealed source: verified'
             echo '- Custom-domain static hashes: verified'
-            echo '- Current quota-safe AI status endpoint: verified'
-            echo '- Workers AI structured planner: verified on production custom domain'
+            echo '- Workers AI binding/status: verified'
+            echo '- Planner gate: live structured planner when available; explicit ai_unavailable degrades only to the verified sealed deterministic ordering fallback'
             echo '- Custom-domain build header: verified'
           } >> "$GITHUB_STEP_SUMMARY"
