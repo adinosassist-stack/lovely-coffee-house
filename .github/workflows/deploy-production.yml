@@ -16,6 +16,7 @@ env:
   CLOUDFLARE_PROJECT: lovelycoffeehouse
   WRANGLER_VERSION: 4.131.0
   EXPECTED_BUILD: lovely-live-source-r22-experience-hardening-20260913-r22
+  EXPECTED_HARDENING: r22-runtime-shield-20260913-h1
 
 jobs:
   deploy-production:
@@ -27,7 +28,7 @@ jobs:
       - name: Checkout exact production candidate
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Verify sealed R22 source
+      - name: Verify sealed R22 source and runtime shield
         shell: bash
         run: |
           set -euo pipefail
@@ -39,30 +40,41 @@ jobs:
           node --check site/assets/r22-experience.fd8d4e4248f3.js
           node --check site/sw.js
           printf '%s  %s\n' '5484286837bc738233aba1fb42a335a43230fde72e7fb486b4455f7496cd76c7' 'site/_worker-r20.js' | sha256sum -c -
+          printf '%s  %s\n' 'ac5d85b4b4247f037637846035c6b6c5326b8b5b1822138fada42959abc8e64f' 'site/_worker.js' | sha256sum -c -
+
           grep -q "import r20 from './_worker-r20.js'" site/_worker.js
+          grep -q "HARDENING_ID = '$EXPECTED_HARDENING'" site/_worker.js
+          grep -q 'strictSameOriginRequest' site/_worker.js
+          grep -q 'AI_BACKOFF_MS' site/_worker.js
+          grep -q "'X-Lovely-Hardening'" site/_worker.js
+          grep -q "'X-Lovely-AI-State'" site/_worker.js
+          grep -q 'TELEMETRY_LIMIT = 60' site/_worker.js
           grep -q "url.pathname === '/api/lovely-actions'" site/_worker.js
           grep -q "url.pathname === '/api/lovely-events'" site/_worker.js
-          grep -q "injectHomeExperience" site/_worker.js
-          grep -q "envWithoutAi(env)" site/_worker.js
+          grep -q 'injectHomeExperience' site/_worker.js
+          grep -q 'envWithoutAi(env)' site/_worker.js
           grep -q "R22_JS = '/assets/r22-experience.fd8d4e4248f3.js'" site/_worker.js
           grep -q "R22_CSS = '/assets/r22-experience.ac88ae83c6a7.css'" site/_worker.js
+
           grep -q "url.pathname==='/api/lovely-actions'" site/assets/r22-experience.fd8d4e4248f3.js
-          grep -q "X-Lovely-R22" site/assets/r22-experience.fd8d4e4248f3.js
-          grep -q "function showMeetingPlanner" site/assets/r22-experience.fd8d4e4248f3.js
-          grep -q "function showDrinkFinder" site/assets/r22-experience.fd8d4e4248f3.js
-          grep -q "function showRepeatOrder" site/assets/r22-experience.fd8d4e4248f3.js
+          grep -q 'X-Lovely-R22' site/assets/r22-experience.fd8d4e4248f3.js
+          grep -q 'function showMeetingPlanner' site/assets/r22-experience.fd8d4e4248f3.js
+          grep -q 'function showDrinkFinder' site/assets/r22-experience.fd8d4e4248f3.js
+          grep -q 'function showRepeatOrder' site/assets/r22-experience.fd8d4e4248f3.js
           ! grep -q 'innerHTML' site/assets/r22-experience.fd8d4e4248f3.js
           ! grep -q 'outerHTML' site/assets/r22-experience.fd8d4e4248f3.js
           ! grep -Eq '\beval\s*\(|new Function\s*\(' site/assets/r22-experience.fd8d4e4248f3.js
           ! grep -qi 'gradient' site/assets/r22-experience.ac88ae83c6a7.css
+
           grep -q "response_format: { type: 'json_object' }" site/_worker-r20.js
           ! grep -q "type: 'json_schema'" site/_worker-r20.js
           grep -q 'function routeStructuredCommerce' site/assets/lovely-ai.8f169dbb9daf.js
           grep -q 'function routeOrderCommand' site/assets/lovely-ai.8f169dbb9daf.js
           grep -q 'LovelyOrderEngine' site/assets/lovely-ai.8f169dbb9daf.js
           grep -q "X-Lovely-Build: $EXPECTED_BUILD" site/_headers
-          grep -q "r22-experience.fd8d4e4248f3.js" site/sw.js
-          grep -q "r22-experience.ac88ae83c6a7.css" site/sw.js
+          grep -q 'r22-experience.fd8d4e4248f3.js' site/sw.js
+          grep -q 'r22-experience.ac88ae83c6a7.css' site/sw.js
+
           BUILD="$EXPECTED_BUILD" node - <<'NODE'
           const fs = require('node:fs');
           const info = JSON.parse(fs.readFileSync('site/build-info.json','utf8'));
@@ -114,14 +126,18 @@ jobs:
           t = re.sub(r'^[ \t]*pages_build_output_dir[ \t]*=.*$', line, t, flags=re.M) if re.search(r'^[ \t]*pages_build_output_dir[ \t]*=.*$', t, flags=re.M) else line + '\n' + t
           def bind(text, table):
               pat = rf'^[ \t]*\[{re.escape(table)}\][ \t]*$'
-              if not re.search(pat, text, flags=re.M): return text.rstrip() + f'\n\n[{table}]\nbinding = "AI"\n'
-              m = re.search(pat, text, flags=re.M); start = m.end()
-              n = re.search(r'^[ \t]*\[[^\]]+\][ \t]*$', text[start:], flags=re.M); end = start + n.start() if n else len(text)
+              if not re.search(pat, text, flags=re.M):
+                  return text.rstrip() + f'\n\n[{table}]\nbinding = "AI"\n'
+              m = re.search(pat, text, flags=re.M)
+              start = m.end()
+              n = re.search(r'^[ \t]*\[[^\]]+\][ \t]*$', text[start:], flags=re.M)
+              end = start + n.start() if n else len(text)
               body = text[start:end]
               body = re.sub(r'^[ \t]*binding[ \t]*=.*$', 'binding = "AI"', body, count=1, flags=re.M) if re.search(r'^[ \t]*binding[ \t]*=.*$', body, flags=re.M) else '\nbinding = "AI"' + body
               return text[:start] + body + text[end:]
           t = bind(t, 'ai')
-          if re.search(r'^[ \t]*\[env\.production\][ \t]*$', t, flags=re.M): t = bind(t, 'env.production.ai')
+          if re.search(r'^[ \t]*\[env\.production\][ \t]*$', t, flags=re.M):
+              t = bind(t, 'env.production.ai')
           p.write_text(t)
           PY
           grep -q '^\[ai\]$' wrangler.toml
@@ -144,58 +160,101 @@ jobs:
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.url }}
         run: |
           set -euo pipefail
-          tmp="$RUNNER_TEMP/r22-deployment"; mkdir -p "$tmp"
+          tmp="$RUNNER_TEMP/r22-deployment"
+          mkdir -p "$tmp"
           if curl -fsSL --retry 3 --retry-delay 2 "$DEPLOYMENT_URL/build-info.json" -o "$tmp/build-info.json"; then
             printf '%s  %s\n' 'd56c4ffd444e00534c01d2878857d48e0ca858abb78b65da7a953e3cbf27b1fd' "$tmp/build-info.json" | sha256sum -c -
             curl -fsSL --retry 3 --retry-delay 2 "$DEPLOYMENT_URL/sw.js" -o "$tmp/sw.js"
             printf '%s  %s\n' 'ad7701dbb83f283b779205cf8ff955faa495104c830b9ed600aee00df87d215d' "$tmp/sw.js" | sha256sum -c -
           else
-            echo "::warning::Unique Pages deployment URL is not serving static files; production certification will rely on the custom domain and exact R22 hashes."
+            echo '::warning::Unique Pages deployment URL is not serving static files; production certification will rely on the custom domain and exact R22 hashes.'
           fi
 
-      - name: Verify custom domain R22 end-to-end
+      - name: Verify custom domain R22 runtime shield end-to-end
         shell: bash
         run: |
           set -euo pipefail
-          tmp="$RUNNER_TEMP/r22-custom"; mkdir -p "$tmp"
+          tmp="$RUNNER_TEMP/r22-custom"
+          mkdir -p "$tmp"
+
           wait_hash() {
             local url="$1" expected="$2" out="$3" ok=false
             for i in {1..20}; do
-              if curl -fsSL --max-time 20 "${url}?build=${GITHUB_SHA}-${i}" -o "$out" 2>/dev/null && printf '%s  %s\n' "$expected" "$out" | sha256sum -c - >/dev/null 2>&1; then ok=true; break; fi
+              if curl -fsSL --max-time 20 "${url}?build=${GITHUB_SHA}-${i}" -o "$out" 2>/dev/null && printf '%s  %s\n' "$expected" "$out" | sha256sum -c - >/dev/null 2>&1; then
+                ok=true
+                break
+              fi
               sleep 3
             done
             [ "$ok" = true ] || { echo "::error::Custom-domain hash did not converge for $url"; return 1; }
           }
+
           wait_ai_binding() {
             local status=''
             for i in {1..20}; do
               status="$(curl -fsS 'https://lovelycoffeehouse.com/api/lovely-status' 2>/dev/null || true)"
-              if STATUS="$status" node -e "const p=JSON.parse(process.env.STATUS||'{}'); process.exit(p.ai===true&&p.runtime==='unchecked'?0:1)" 2>/dev/null; then return 0; fi
+              if STATUS="$status" node -e "const p=JSON.parse(process.env.STATUS||'{}'); process.exit(p.ai===true&&p.runtime==='unchecked'?0:1)" 2>/dev/null; then
+                return 0
+              fi
               sleep 3
             done
             echo '::error::Custom-domain Workers AI binding/status did not become ready'
             return 1
           }
+
+          verify_provenance_shield() {
+            local body path code headers
+            body='{"question":"price of cappuccino","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
+            for path in lovely-ai lovely-actions; do
+              headers="$tmp/no-origin-$path.headers"
+              code="$(curl -sS -D "$headers" -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data "$body" "https://lovelycoffeehouse.com/api/$path")"
+              [ "$code" = 403 ] || { echo "::error::No-provenance /api/$path was not blocked: HTTP $code"; return 1; }
+              tr -d '\r' < "$headers" | grep -qi "^x-lovely-hardening: $EXPECTED_HARDENING$" || { echo "::error::Missing runtime hardening header on /api/$path"; return 1; }
+            done
+            code="$(curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data '{"event":"cart_view","page":"home","meta":{}}' 'https://lovelycoffeehouse.com/api/lovely-events')"
+            [ "$code" = 403 ] || { echo "::error::No-provenance telemetry was not blocked: HTTP $code"; return 1; }
+          }
+
+          verify_cross_origin_shield() {
+            local body path code
+            body='{"question":"price of cappuccino","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
+            for path in lovely-ai lovely-actions; do
+              code="$(curl -sS -o /dev/null -w '%{http_code}' -H 'Origin: https://evil.example' -H 'Content-Type: application/json' --data "$body" "https://lovelycoffeehouse.com/api/$path")"
+              [ "$code" = 403 ] || { echo "::error::Cross-origin /api/$path was not blocked: HTTP $code"; return 1; }
+            done
+            code="$(curl -sS -o /dev/null -w '%{http_code}' -H 'Origin: https://evil.example' -H 'Content-Type: application/json' --data '{"event":"cart_view","page":"home","meta":{}}' 'https://lovelycoffeehouse.com/api/lovely-events')"
+            [ "$code" = 403 ] || { echo "::error::Cross-origin telemetry was not blocked: HTTP $code"; return 1; }
+          }
+
           verify_deterministic_commerce() {
-            local body client code out response
+            local body client code out response headers
             client="githubprod${GITHUB_SHA:0:8}a${GITHUB_RUN_ATTEMPT}"
             body='{"question":"add one cappuccino","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
-            response="$RUNNER_TEMP/r22-actions.json"
-            code="$(curl -sS -o "$response" -w '%{http_code}' -H 'Origin: https://lovelycoffeehouse.com' -H 'Content-Type: application/json' -H "X-Lovely-Client: $client" --data "$body" 'https://lovelycoffeehouse.com/api/lovely-actions' 2>/dev/null || true)"
+            response="$tmp/r22-actions.json"
+            headers="$tmp/r22-actions.headers"
+            code="$(curl -sS -D "$headers" -o "$response" -w '%{http_code}' -H 'Origin: https://lovelycoffeehouse.com' -H 'Content-Type: application/json' -H "X-Lovely-Client: $client" --data "$body" 'https://lovelycoffeehouse.com/api/lovely-actions' 2>/dev/null || true)"
             out="$(cat "$response" 2>/dev/null || true)"
             [ "$code" = 503 ] || { echo "::error::R22 transaction endpoint unexpectedly invoked cloud planner (HTTP $code)"; printf '%s\n' "$out"; return 1; }
             OUT="$out" node -e "const p=JSON.parse(process.env.OUT||'{}'); process.exit(p.error==='ai_unavailable'?0:1)" 2>/dev/null || { echo '::error::Unexpected R22 transaction fallback response'; return 1; }
+            tr -d '\r' < "$headers" > "$headers.clean"
+            grep -qi "^x-lovely-hardening: $EXPECTED_HARDENING$" "$headers.clean" || { echo '::error::Commerce hardening header mismatch'; return 1; }
+            grep -qi '^x-lovely-ai-state: commerce-local$' "$headers.clean" || { echo '::error::Commerce AI state header mismatch'; return 1; }
           }
+
           verify_telemetry() {
             local out code
-            out="$RUNNER_TEMP/r22-event.json"
+            out="$tmp/r22-event.json"
             code="$(curl -sS -o "$out" -w '%{http_code}' -H 'Origin: https://lovelycoffeehouse.com' -H 'Content-Type: application/json' --data '{"event":"cart_view","page":"home","meta":{"count":1,"total":35}}' 'https://lovelycoffeehouse.com/api/lovely-events')"
             [ "$code" = 202 ] || { echo "::error::R22 telemetry acceptance failed HTTP $code"; cat "$out"; return 1; }
             OUT="$(cat "$out")" node -e "const p=JSON.parse(process.env.OUT||'{}');process.exit(p.accepted===true?0:1)"
-            code="$(curl -sS -o /dev/null -w '%{http_code}' -H 'Origin: https://evil.example' -H 'Content-Type: application/json' --data '{"event":"cart_view","page":"home","meta":{}}' 'https://lovelycoffeehouse.com/api/lovely-events')"
-            [ "$code" = 403 ] || { echo "::error::R22 telemetry cross-origin guard failed HTTP $code"; return 1; }
             code="$(curl -sS -o /dev/null -w '%{http_code}' -H 'Origin: https://lovelycoffeehouse.com' -H 'Content-Type: application/json' --data '{"event":"free_form_customer_text","page":"home","meta":{}}' 'https://lovelycoffeehouse.com/api/lovely-events')"
             [ "$code" = 400 ] || { echo "::error::R22 telemetry allowlist guard failed HTTP $code"; return 1; }
+            python3 - <<'PY' > "$tmp/oversized.json"
+          import json
+          print(json.dumps({'event':'cart_view','page':'home','meta':{'padding':'x'*5000}}))
+          PY
+            code="$(curl -sS -o /dev/null -w '%{http_code}' -H 'Origin: https://lovelycoffeehouse.com' -H 'Content-Type: application/json' --data-binary @"$tmp/oversized.json" 'https://lovelycoffeehouse.com/api/lovely-events')"
+            [ "$code" = 413 ] || { echo "::error::Oversized telemetry was not rejected: HTTP $code"; return 1; }
           }
 
           wait_hash 'https://lovelycoffeehouse.com/build-info.json' 'd56c4ffd444e00534c01d2878857d48e0ca858abb78b65da7a953e3cbf27b1fd' "$tmp/build-info.json"
@@ -204,6 +263,8 @@ jobs:
           wait_hash 'https://lovelycoffeehouse.com/assets/r22-experience.fd8d4e4248f3.js' 'fd8d4e4248f394107bba1fe6fc9e27de6ec6a77c129d1a8a02a2a9b545abee41' "$tmp/r22.js"
           wait_hash 'https://lovelycoffeehouse.com/assets/r22-experience.ac88ae83c6a7.css' 'ac88ae83c6a713a816c5a7d8c04972d29cfc012337d1bf6f93e0847475ee5671' "$tmp/r22.css"
           wait_ai_binding
+          verify_provenance_shield
+          verify_cross_origin_shield
           verify_deterministic_commerce
           verify_telemetry
 
@@ -215,8 +276,16 @@ jobs:
 
           private_code="$(curl -sS -o /dev/null -w '%{http_code}' 'https://lovelycoffeehouse.com/_worker-r20.js')"
           [ "$private_code" = 404 ] || { echo "::error::Private R20 worker module is publicly reachable (HTTP $private_code)"; exit 1; }
-          headers="$(curl -fsSL --dump-header - --output /dev/null --retry 10 --retry-delay 3 "https://lovelycoffeehouse.com/robots.txt?build=$GITHUB_SHA")"
-          printf '%s\n' "$headers" | tr -d '\r' | grep -iF "x-lovely-build: $EXPECTED_BUILD" >/dev/null || { echo '::error::Custom-domain build header mismatch'; printf '%s\n' "$headers" | tr -d '\r' | grep -i '^x-lovely-build:' || true; exit 1; }
+
+          headers="$tmp/headers.txt"
+          curl -fsSL -D "$headers" -o /dev/null --retry 10 --retry-delay 3 "https://lovelycoffeehouse.com/robots.txt?build=$GITHUB_SHA"
+          tr -d '\r' < "$headers" > "$headers.clean"
+          grep -qi "^x-lovely-build: $EXPECTED_BUILD$" "$headers.clean" || { echo '::error::Custom-domain build header mismatch'; exit 1; }
+          grep -qi "^x-lovely-hardening: $EXPECTED_HARDENING$" "$headers.clean" || { echo '::error::Custom-domain hardening header mismatch'; exit 1; }
+          grep -qi '^strict-transport-security: max-age=31536000' "$headers.clean"
+          grep -qi '^x-content-type-options: nosniff' "$headers.clean"
+          grep -qi '^x-frame-options: DENY' "$headers.clean"
+          grep -qi '^content-security-policy:' "$headers.clean"
 
       - name: Production deployment summary
         shell: bash
@@ -227,16 +296,19 @@ jobs:
             echo '### Lovely Coffee House R22 production deployment'
             echo "- Git SHA: \`$GITHUB_SHA\`"
             echo "- Build: \`$EXPECTED_BUILD\`"
+            echo "- Runtime shield: \`$EXPECTED_HARDENING\`"
             echo "- Deployment URL: $DEPLOYMENT_URL"
             echo '- Custom domain: https://lovelycoffeehouse.com'
             echo '- Sealed source: verified (53 files)'
             echo '- R20 rollback worker: byte-for-byte verified'
-            echo '- R21 rollback manifest: retained'
+            echo '- R21/R20 emergency rollback line: retained and independently verified'
             echo '- Transaction path: deterministic and zero-network first in browser; zero Workers AI neurons'
+            echo '- Browser provenance + cross-origin API shield: verified'
+            echo '- Runtime hardening + commerce AI-state headers: verified'
+            echo '- Telemetry allowlist + size guard: verified'
             echo '- Find My Drink: deterministic 3-choice recommender'
             echo '- Meeting Planner: fixed-price cart builder + WhatsApp quote fallback'
             echo '- Repeat order: local-device snapshot revalidated against current catalog'
-            echo '- Analytics: same-origin allowlisted no-PII funnel events'
-            echo '- AI/STT/TTS circuit breaker: enabled'
-            echo '- Custom-domain hashes, HTML injection and build header: verified'
+            echo '- AI/STT/TTS adaptive provider backoff: release-gated'
+            echo '- Custom-domain hashes, HTML injection and security headers: verified'
           } >> "$GITHUB_STEP_SUMMARY"
