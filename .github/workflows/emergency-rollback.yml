@@ -1,0 +1,286 @@
+name: Lovely Coffee House Emergency Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Rollback target'
+        required: true
+        type: choice
+        options:
+          - r21
+          - r20
+      confirm:
+        description: 'Type ROLLBACK-R21 or ROLLBACK-R20 exactly'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lovely-coffee-house-production
+  cancel-in-progress: false
+
+env:
+  CLOUDFLARE_PROJECT: lovelycoffeehouse
+  WRANGLER_VERSION: 4.131.0
+
+jobs:
+  rollback-production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Resolve immutable rollback target
+        id: target
+        shell: bash
+        env:
+          TARGET_INPUT: ${{ inputs.target }}
+          CONFIRM_INPUT: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          case "$TARGET_INPUT" in
+            r21)
+              sha='b50d94ca07e6becc76f098ff76e7e977919a0a07'
+              manifest='release/r21-site.sha256'
+              build='lovely-live-source-r21-ai-quota-efficiency-20260913-r21'
+              expected_confirm='ROLLBACK-R21'
+              ;;
+            r20)
+              sha='ab83bf6d794fd044c8e78a65fa32986e5fac4c5a'
+              manifest='release/r20-site.sha256'
+              build='lovely-live-source-r20-header-consistency-20260912-r20'
+              expected_confirm='ROLLBACK-R20'
+              ;;
+            *)
+              echo '::error::Unsupported rollback target'
+              exit 1
+              ;;
+          esac
+          [ "$CONFIRM_INPUT" = "$expected_confirm" ] || {
+            echo "::error::Confirmation mismatch. Expected $expected_confirm"
+            exit 1
+          }
+          {
+            echo "sha=$sha"
+            echo "manifest=$manifest"
+            echo "build=$build"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact rollback commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ steps.target.outputs.sha }}
+          fetch-depth: 1
+
+      - name: Verify exact sealed rollback source
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          MANIFEST: ${{ steps.target.outputs.manifest }}
+          EXPECTED_BUILD: ${{ steps.target.outputs.build }}
+          TARGET_NAME: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          [ "$(git rev-parse HEAD)" = "$TARGET_SHA" ] || { echo '::error::Rollback checkout SHA mismatch'; exit 1; }
+          [ -f "$MANIFEST" ] || { echo "::error::Missing rollback manifest $MANIFEST"; exit 1; }
+          [ -d site ] || { echo '::error::Missing site directory'; exit 1; }
+
+          find site -type f -printf '%P\n' | sort > "$RUNNER_TEMP/site-files.txt"
+          awk '{print $2}' "$MANIFEST" | sort > "$RUNNER_TEMP/manifest-files.txt"
+          diff -u "$RUNNER_TEMP/manifest-files.txt" "$RUNNER_TEMP/site-files.txt"
+          (cd site && sha256sum -c "../$MANIFEST")
+
+          node --input-type=module --check < site/_worker.js
+          node --check site/sw.js
+
+          BUILD="$EXPECTED_BUILD" node - <<'NODE'
+          const fs = require('node:fs');
+          const info = JSON.parse(fs.readFileSync('site/build-info.json', 'utf8'));
+          if (info.build !== process.env.BUILD) throw new Error(`Rollback build mismatch: ${info.build}`);
+          if (info.ai_binding !== 'AI') throw new Error('Rollback AI binding metadata mismatch');
+          NODE
+
+          if [ "$TARGET_NAME" = r21 ]; then
+            node --input-type=module --check < site/_worker-r20.js
+            printf '%s  %s\n' '5484286837bc738233aba1fb42a335a43230fde72e7fb486b4455f7496cd76c7' 'site/_worker-r20.js' | sha256sum -c -
+            grep -q "import r20 from './_worker-r20.js'" site/_worker.js
+          else
+            printf '%s  %s\n' '5484286837bc738233aba1fb42a335a43230fde72e7fb486b4455f7496cd76c7' 'site/_worker.js' | sha256sum -c -
+          fi
+
+          grep -q "X-Lovely-Build: $EXPECTED_BUILD" site/_headers
+
+          build_hash="$(awk '$2=="build-info.json" {print $1}' "$MANIFEST")"
+          sw_hash="$(awk '$2=="sw.js" {print $1}' "$MANIFEST")"
+          robots_hash="$(awk '$2=="robots.txt" {print $1}' "$MANIFEST")"
+          worker_hash="$(awk '$2=="_worker.js" {print $1}' "$MANIFEST")"
+          [ -n "$build_hash" ] && [ -n "$sw_hash" ] && [ -n "$robots_hash" ] && [ -n "$worker_hash" ] || {
+            echo '::error::Rollback manifest missing critical file hashes'
+            exit 1
+          }
+          {
+            echo "ROLLBACK_BUILD_HASH=$build_hash"
+            echo "ROLLBACK_SW_HASH=$sw_hash"
+            echo "ROLLBACK_ROBOTS_HASH=$robots_hash"
+            echo "ROLLBACK_WORKER_HASH=$worker_hash"
+          } >> "$GITHUB_ENV"
+
+      - name: Qualify exact Cloudflare Pages project
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          [ -n "${CLOUDFLARE_API_TOKEN:-}" ] || { echo '::error::Missing CLOUDFLARE_API_TOKEN'; exit 1; }
+          [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || { echo '::error::Missing CLOUDFLARE_ACCOUNT_ID'; exit 1; }
+          CLOUDFLARE_API_TOKEN="$(printf '%s' "$CLOUDFLARE_API_TOKEN" | tr -d '\r\n')"
+          CLOUDFLARE_ACCOUNT_ID="$(printf '%s' "$CLOUDFLARE_ACCOUNT_ID" | tr -d '[:space:]')"
+          export CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
+          [[ "$CLOUDFLARE_ACCOUNT_ID" =~ ^[A-Za-z0-9_-]{32}$ ]] || { echo '::error::Invalid Cloudflare Account ID'; exit 1; }
+          body="$RUNNER_TEMP/project.json"
+          code="$(curl -sS -o "$body" -w '%{http_code}' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$CLOUDFLARE_PROJECT")"
+          [ "$code" = 200 ] || { cat "$body"; exit 1; }
+          PROJECT_JSON="$(cat "$body")" node - <<'NODE'
+          const p = JSON.parse(process.env.PROJECT_JSON || '{}');
+          if (p.success !== true || p.result?.name !== process.env.CLOUDFLARE_PROJECT) throw new Error('Cloudflare project mismatch');
+          NODE
+          {
+            printf 'CLOUDFLARE_API_TOKEN=%s\n' "$CLOUDFLARE_API_TOKEN"
+            printf 'CLOUDFLARE_ACCOUNT_ID=%s\n' "$CLOUDFLARE_ACCOUNT_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Preserve Pages config and bind Workers AI
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f wrangler.toml wrangler.json wrangler.jsonc
+          npx --yes "wrangler@${WRANGLER_VERSION}" pages download config "$CLOUDFLARE_PROJECT" --force
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path('wrangler.toml')
+          t = p.read_text()
+          line = 'pages_build_output_dir = "./site"'
+          t = re.sub(r'^[ \t]*pages_build_output_dir[ \t]*=.*$', line, t, flags=re.M) if re.search(r'^[ \t]*pages_build_output_dir[ \t]*=.*$', t, flags=re.M) else line + '\n' + t
+          def bind(text, table):
+              pat = rf'^[ \t]*\[{re.escape(table)}\][ \t]*$'
+              if not re.search(pat, text, flags=re.M):
+                  return text.rstrip() + f'\n\n[{table}]\nbinding = "AI"\n'
+              m = re.search(pat, text, flags=re.M)
+              start = m.end()
+              n = re.search(r'^[ \t]*\[[^\]]+\][ \t]*$', text[start:], flags=re.M)
+              end = start + n.start() if n else len(text)
+              body = text[start:end]
+              body = re.sub(r'^[ \t]*binding[ \t]*=.*$', 'binding = "AI"', body, count=1, flags=re.M) if re.search(r'^[ \t]*binding[ \t]*=.*$', body, flags=re.M) else '\nbinding = "AI"' + body
+              return text[:start] + body + text[end:]
+          t = bind(t, 'ai')
+          if re.search(r'^[ \t]*\[env\.production\][ \t]*$', t, flags=re.M):
+              t = bind(t, 'env.production.ai')
+          p.write_text(t)
+          PY
+          grep -q '^\[ai\]$' wrangler.toml
+          if grep -q '^\[env.production\]$' wrangler.toml; then grep -q '^\[env.production.ai\]$' wrangler.toml; fi
+
+      - name: Deploy immutable rollback target
+        id: deploy
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          EXPECTED_BUILD: ${{ steps.target.outputs.build }}
+          TARGET_NAME: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/rollback-deploy.log"
+          npx --yes "wrangler@${WRANGLER_VERSION}" pages deploy site \
+            --project-name="$CLOUDFLARE_PROJECT" \
+            --branch=main \
+            --commit-hash="$TARGET_SHA" \
+            --commit-message="EMERGENCY ROLLBACK $TARGET_NAME $TARGET_SHA $EXPECTED_BUILD" 2>&1 | tee "$log"
+          url="$(grep -Eo 'https://[A-Za-z0-9.-]+\.pages\.dev' "$log" | tail -n1 || true)"
+          [ -n "$url" ] || { echo '::error::No Pages rollback deployment URL'; exit 1; }
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Certify rollback deployment URL
+        shell: bash
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.url }}
+          EXPECTED_BUILD: ${{ steps.target.outputs.build }}
+        run: |
+          set -euo pipefail
+          tmp="$RUNNER_TEMP/rollback-pages"; mkdir -p "$tmp"
+          curl -fsSL --retry 4 --retry-delay 2 "$DEPLOYMENT_URL/build-info.json" -o "$tmp/build-info.json"
+          printf '%s  %s\n' "$ROLLBACK_BUILD_HASH" "$tmp/build-info.json" | sha256sum -c -
+          curl -fsSL --retry 4 --retry-delay 2 "$DEPLOYMENT_URL/sw.js" -o "$tmp/sw.js"
+          printf '%s  %s\n' "$ROLLBACK_SW_HASH" "$tmp/sw.js" | sha256sum -c -
+          BUILD="$EXPECTED_BUILD" FILE="$tmp/build-info.json" node - <<'NODE'
+          const fs = require('node:fs');
+          const info = JSON.parse(fs.readFileSync(process.env.FILE, 'utf8'));
+          if (info.build !== process.env.BUILD) throw new Error(`Pages rollback build mismatch: ${info.build}`);
+          NODE
+
+      - name: Certify rollback on custom domain
+        shell: bash
+        env:
+          EXPECTED_BUILD: ${{ steps.target.outputs.build }}
+        run: |
+          set -euo pipefail
+          tmp="$RUNNER_TEMP/rollback-live"; mkdir -p "$tmp"
+          wait_hash() {
+            local url="$1" expected="$2" out="$3" ok=false
+            for i in {1..24}; do
+              if curl -fsSL --max-time 20 "${url}?rollback=${GITHUB_RUN_ID}-${i}" -o "$out" 2>/dev/null && printf '%s  %s\n' "$expected" "$out" | sha256sum -c - >/dev/null 2>&1; then
+                ok=true
+                break
+              fi
+              sleep 3
+            done
+            [ "$ok" = true ] || { echo "::error::Rollback hash did not converge for $url"; return 1; }
+          }
+
+          wait_hash 'https://lovelycoffeehouse.com/build-info.json' "$ROLLBACK_BUILD_HASH" "$tmp/build-info.json"
+          wait_hash 'https://lovelycoffeehouse.com/sw.js' "$ROLLBACK_SW_HASH" "$tmp/sw.js"
+          wait_hash 'https://lovelycoffeehouse.com/robots.txt' "$ROLLBACK_ROBOTS_HASH" "$tmp/robots.txt"
+
+          BUILD="$EXPECTED_BUILD" FILE="$tmp/build-info.json" node - <<'NODE'
+          const fs = require('node:fs');
+          const info = JSON.parse(fs.readFileSync(process.env.FILE, 'utf8'));
+          if (info.build !== process.env.BUILD) throw new Error(`Custom-domain rollback build mismatch: ${info.build}`);
+          NODE
+
+          headers="$tmp/headers.txt"
+          curl -fsSL -D "$headers" -o /dev/null "https://lovelycoffeehouse.com/robots.txt?rollback=${GITHUB_RUN_ID}"
+          tr -d '\r' < "$headers" > "$headers.clean"
+          grep -qi "^x-lovely-build: $EXPECTED_BUILD$" "$headers.clean"
+          grep -qi '^strict-transport-security: max-age=31536000' "$headers.clean"
+          grep -qi '^x-content-type-options: nosniff' "$headers.clean"
+          grep -qi '^x-frame-options: DENY' "$headers.clean"
+          grep -qi '^content-security-policy:' "$headers.clean"
+
+          code="$(curl -sS -o /dev/null -w '%{http_code}' 'https://lovelycoffeehouse.com/_worker-r20.js')"
+          [ "$code" = 404 ] || { echo "::error::Private rollback worker exposure: HTTP $code"; exit 1; }
+
+          status="$(curl -fsS 'https://lovelycoffeehouse.com/api/lovely-status')"
+          STATUS="$status" node -e "const p=JSON.parse(process.env.STATUS||'{}'); if(p.ai!==true||p.runtime!=='unchecked') process.exit(1)"
+
+      - name: Rollback summary
+        if: always()
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          EXPECTED_BUILD: ${{ steps.target.outputs.build }}
+          TARGET_NAME: ${{ inputs.target }}
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          {
+            echo '### Emergency rollback'
+            echo "- Target: \`$TARGET_NAME\`"
+            echo "- Immutable SHA: \`$TARGET_SHA\`"
+            echo "- Build: \`$EXPECTED_BUILD\`"
+            echo "- Pages URL: \`${DEPLOYMENT_URL:-not-created}\`"
+            echo '- Source manifest coverage: verified before deploy'
+            echo '- Custom-domain hashes and security headers: certified after deploy'
+            echo '- Workers AI quota availability is not required for rollback certification.'
+            echo '- To roll forward, run the normal Production Deploy workflow manually from current main.'
+          } >> "$GITHUB_STEP_SUMMARY"
