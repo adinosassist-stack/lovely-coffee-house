@@ -1,159 +1,67 @@
-name: Diagnose R20 custom-domain API
+name: Generate committed AI runtime diagnostic
 
 on:
   push:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  diagnose:
-    if: contains(github.event.head_commit.message, '[diag-r20-custom]')
+  generate-ai-runtime-diagnostic:
+    if: contains(github.event.head_commit.message, '[gen-ai-runtime-diag]')
     runs-on: ubuntu-latest
-    env:
-      CLOUDFLARE_PROJECT: lovelycoffeehouse
-      WRANGLER_VERSION: 4.131.0
     steps:
-      - name: Checkout sealed source
+      - name: Checkout main
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
 
-      - name: Prepare production Pages config
-        shell: bash
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          set -euo pipefail
-          CLOUDFLARE_API_TOKEN="$(printf '%s' "$CLOUDFLARE_API_TOKEN" | tr -d '\r\n')"
-          CLOUDFLARE_ACCOUNT_ID="$(printf '%s' "$CLOUDFLARE_ACCOUNT_ID" | tr -d '[:space:]')"
-          export CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
-          {
-            printf 'CLOUDFLARE_API_TOKEN=%s\n' "$CLOUDFLARE_API_TOKEN"
-            printf 'CLOUDFLARE_ACCOUNT_ID=%s\n' "$CLOUDFLARE_ACCOUNT_ID"
-          } >> "$GITHUB_ENV"
-          rm -f wrangler.toml wrangler.json wrangler.jsonc
-          npx --yes "wrangler@${WRANGLER_VERSION}" pages download config "$CLOUDFLARE_PROJECT" --force
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-          p=Path('wrangler.toml')
-          t=p.read_text()
-          line='pages_build_output_dir = "./site"'
-          t=re.sub(r'^[ \t]*pages_build_output_dir[ \t]*=.*$',line,t,flags=re.M) if re.search(r'^[ \t]*pages_build_output_dir[ \t]*=.*$',t,flags=re.M) else line+'\n'+t
-          def bind(text, table):
-              pat=rf'^[ \t]*\[{re.escape(table)}\][ \t]*$'
-              if not re.search(pat,text,flags=re.M):
-                  return text.rstrip()+f'\n\n[{table}]\nbinding = "AI"\n'
-              m=re.search(pat,text,flags=re.M); start=m.end()
-              n=re.search(r'^[ \t]*\[[^\]]+\][ \t]*$',text[start:],flags=re.M); end=start+n.start() if n else len(text)
-              body=text[start:end]
-              body=re.sub(r'^[ \t]*binding[ \t]*=.*$','binding = "AI"',body,count=1,flags=re.M) if re.search(r'^[ \t]*binding[ \t]*=.*$',body,flags=re.M) else '\nbinding = "AI"'+body
-              return text[:start]+body+text[end:]
-          t=bind(t,'ai')
-          if re.search(r'^[ \t]*\[env\.production\][ \t]*$',t,flags=re.M):
-              t=bind(t,'env.production.ai')
-          p.write_text(t)
-          PY
-          grep -q '^\[ai\]$' wrangler.toml
-
-      - name: Confirm custom-domain failure surface
+      - name: Patch status endpoint with sanitized direct AI probe
         shell: bash
         run: |
           set -euo pipefail
-          probe() {
-            local label="$1" url="$2"; shift 2
-            local hdr="$RUNNER_TEMP/$label.hdr" body="$RUNNER_TEMP/$label.body" code
-            code="$(curl --max-time 20 -sS -D "$hdr" -o "$body" -w '%{http_code}' "$@" "$url" || true)"
-            local mitigated='no'; grep -qi '^cf-mitigated: challenge' "$hdr" && mitigated='yes'
-            local ctype; ctype="$(grep -i '^content-type:' "$hdr" | tail -n1 | tr -d '\r' | cut -d' ' -f2- || true)"
-            echo "$label http=$code challenge=$mitigated content_type=${ctype:-none}"
-          }
-          base='https://lovelycoffeehouse.com'
-          probe status "$base/api/lovely-status"
-          planner='{"question":"add one cappuccino","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
-          probe planner_post "$base/api/lovely-actions" \
-            -H 'Origin: https://lovelycoffeehouse.com' \
-            -H 'Sec-Fetch-Site: same-origin' \
-            -H 'Sec-Fetch-Mode: cors' \
-            -H 'Content-Type: application/json' \
-            -H 'X-Lovely-Client: githubruntimepre20260913' \
-            -H 'User-Agent: Mozilla/5.0' \
-            --data "$planner"
-          printf 'planner_post_body='; head -c 700 "$RUNNER_TEMP/planner_post.body" | tr '\r\n' ' '; echo
-          printf 'status_body='; head -c 400 "$RUNNER_TEMP/status.body" | tr '\r\n' ' '; echo
-
-      - name: Patch status endpoint for one sanitized AI runtime probe
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp site/_worker.js "$RUNNER_TEMP/original-worker.js"
           python3 - <<'PY'
           from pathlib import Path
           p=Path('site/_worker.js')
           t=p.read_text()
           old="const M_worker_routes_status = (() => {\nconst { aiBindingReady } = M_worker_lib_ai;\nconst { apiJson } = M_worker_lib_security;\nasync function handleStatus({ env }) {\n  // Status checks must never spend Workers AI neurons. Runtime health is verified\n  // by an actual planner request in the production gate instead.\n  return apiJson({ ai: aiBindingReady(env), runtime: 'unchecked' });\n}\nreturn { handleStatus };\n})();"
-          new="const M_worker_routes_status = (() => {\nconst { aiBindingReady } = M_worker_lib_ai;\nconst { apiJson } = M_worker_lib_security;\nasync function handleStatus({ env }) {\n  const binding = aiBindingReady(env);\n  if (!binding) return apiJson({ ai:false, binding:false, runtime:'binding_missing' });\n  try {\n    const result = await env.AI.run('@cf/meta/llama-3.1-8b-instruct-fast', { messages:[{ role:'user', content:'Reply OK.' }], max_tokens:8, temperature:0 });\n    return apiJson({ ai:Boolean(result), binding:true, runtime:'ok', resultKeys:result && typeof result === 'object' ? Object.keys(result).slice(0,12) : [] });\n  } catch (error) {\n    const cause = error && error.cause ? error.cause : null;\n    const code = error && (error.code ?? error.status) != null ? (error.code ?? error.status) : (cause && (cause.code ?? cause.status) != null ? (cause.code ?? cause.status) : '');\n    const message = String((error && error.message) || (cause && cause.message) || (error && error.name) || 'runtime_error').replace(/[\\r\\n]+/g,' ').slice(0,260);\n    const causeMessage = String((cause && cause.message) || '').replace(/[\\r\\n]+/g,' ').slice(0,220);\n    return apiJson({ ai:false, binding:true, runtime:'error', code:String(code).slice(0,50), message, causeMessage });\n  }\n}\nreturn { handleStatus };\n})();"
+          new="const M_worker_routes_status = (() => {\nconst { aiBindingReady } = M_worker_lib_ai;\nconst { apiJson } = M_worker_lib_security;\nasync function handleStatus({ env }) {\n  const binding = aiBindingReady(env);\n  if (!binding) return apiJson({ ai:false, binding:false, runtime:'binding_missing' });\n  try {\n    const result = await env.AI.run('@cf/meta/llama-3.1-8b-instruct-fast', { messages:[{ role:'user', content:'Reply OK.' }], max_tokens:8, temperature:0 });\n    return apiJson({ ai:Boolean(result), binding:true, runtime:'ok', resultKeys:result && typeof result === 'object' ? Object.keys(result).slice(0,12) : [] });\n  } catch (error) {\n    const cause = error && error.cause ? error.cause : null;\n    const code = error && (error.code ?? error.status) != null ? (error.code ?? error.status) : (cause && (cause.code ?? cause.status) != null ? (cause.code ?? cause.status) : '');\n    const name = String((error && error.name) || '').slice(0,60);\n    const message = String((error && error.message) || (cause && cause.message) || 'runtime_error').replace(/[\\r\\n]+/g,' ').slice(0,300);\n    const causeMessage = String((cause && cause.message) || '').replace(/[\\r\\n]+/g,' ').slice(0,240);\n    return apiJson({ ai:false, binding:true, runtime:'error', code:String(code).slice(0,60), name, message, causeMessage });\n  }\n}\nreturn { handleStatus };\n})();"
           if old not in t:
               raise SystemExit('quota-safe status module target not found')
           p.write_text(t.replace(old,new,1))
           PY
           node --check site/_worker.js
 
-      - name: Deploy temporary runtime diagnostic
+      - name: Reseal R20 source
         shell: bash
         run: |
           set -euo pipefail
-          npx --yes "wrangler@${WRANGLER_VERSION}" pages deploy site \
-            --project-name="$CLOUDFLARE_PROJECT" \
-            --branch=main \
-            --commit-hash="$GITHUB_SHA" \
-            --commit-message="Temporary Workers AI runtime diagnostic $GITHUB_SHA"
-
-      - name: Read sanitized Workers AI runtime error
-        shell: bash
-        run: |
-          set -euo pipefail
-          seen=false
-          for i in {1..15}; do
-            body="$(curl --max-time 25 -fsS 'https://lovelycoffeehouse.com/api/lovely-status?runtime_diag=1' 2>/dev/null || true)"
-            echo "runtime_probe_attempt=$i body=$body"
-            if BODY="$body" node -e "const p=JSON.parse(process.env.BODY||'{}');process.exit(['ok','error','binding_missing'].includes(p.runtime)?0:1)" 2>/dev/null; then
-              seen=true
-              break
-            fi
-            sleep 2
-          done
-          [ "$seen" = true ] || { echo '::error::Temporary runtime diagnostic did not propagate'; exit 1; }
-
-      - name: Restore sealed production worker
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ ! -f "$RUNNER_TEMP/original-worker.js" ]; then
-            echo '::error::Original worker backup missing; refusing to alter production further'
-            exit 1
-          fi
-          cp "$RUNNER_TEMP/original-worker.js" site/_worker.js
-          node --check site/_worker.js
+          hash="$(sha256sum site/_worker.js | awk '{print $1}')"
+          python3 - "$hash" <<'PY'
+          from pathlib import Path
+          import re,sys
+          h=sys.argv[1]
+          p=Path('release/r20-site.sha256')
+          t=p.read_text()
+          n=re.sub(r'^[0-9a-f]{64}  _worker\.js$', f'{h}  _worker.js', t, count=1, flags=re.M)
+          if n == t:
+              raise SystemExit('worker seal target not found')
+          p.write_text(n)
+          PY
+          test "$(wc -l < release/r20-site.sha256)" -eq 50
+          test "$(find site -type f | wc -l)" -eq 50
           (cd site && sha256sum -c ../release/r20-site.sha256)
-          npx --yes "wrangler@${WRANGLER_VERSION}" pages deploy site \
-            --project-name="$CLOUDFLARE_PROJECT" \
-            --branch=main \
-            --commit-hash="$GITHUB_SHA" \
-            --commit-message="Restore sealed R20 worker after AI runtime diagnostic $GITHUB_SHA"
 
-      - name: Verify sealed worker restored
-        if: always()
+      - name: Push diagnostic source branch
         shell: bash
         run: |
           set -euo pipefail
-          for i in {1..15}; do
-            body="$(curl --max-time 15 -fsS 'https://lovelycoffeehouse.com/api/lovely-status?restore_check=1' 2>/dev/null || true)"
-            echo "restore_attempt=$i body=$body"
-            if BODY="$body" node -e "const p=JSON.parse(process.env.BODY||'{}');process.exit(p.ai===true&&p.runtime==='unchecked'?0:1)" 2>/dev/null; then exit 0; fi
-            sleep 2
-          done
-          echo '::error::Sealed quota-safe status endpoint did not restore'
-          exit 1
+          branch='chatgpt/committed-ai-runtime-diag-r20-20260913'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -b "$branch"
+          git add site/_worker.js release/r20-site.sha256
+          git commit -m 'Temporarily expose sanitized Workers AI runtime error'
+          git push origin "$branch"
+          echo "Created $branch"
