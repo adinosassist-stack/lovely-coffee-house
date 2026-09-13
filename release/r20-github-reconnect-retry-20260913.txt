@@ -3,3 +3,6 @@ Date: 2026-09-13
 Purpose: Trigger a fresh production deployment after restoring the ChatGPT GitHub connection and observing startup_failure runs that created zero jobs.
 Sealed R20 site files are intentionally unchanged.
 Previous diagnostic head: 09b4dfa15d448fd56c8757ce03589e7170ed6e0c
+Fresh production retry head: 45d7780a14c5fed87c99064f10495960b32787b4
+Production result: deploy/static integrity passed; custom-domain structured planner remained unavailable.
+Next action: run the existing one-shot Workers AI runtime diagnostic and auto-restore sealed R20.
