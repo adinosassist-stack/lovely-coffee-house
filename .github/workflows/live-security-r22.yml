@@ -1,0 +1,148 @@
+name: R22 Live Security Gate
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 */6 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lovely-coffee-house-r22-live-security
+  cancel-in-progress: true
+
+env:
+  SITE: https://lovelycoffeehouse.com
+  EXPECTED_BUILD: lovely-live-source-r22-experience-hardening-20260913-r22
+  BUILD_INFO_SHA256: d56c4ffd444e00534c01d2878857d48e0ca858abb78b65da7a953e3cbf27b1fd
+  SW_SHA256: ad7701dbb83f283b779205cf8ff955faa495104c830b9ed600aee00df87d215d
+  R22_JS_SHA256: fd8d4e4248f394107bba1fe6fc9e27de6ec6a77c129d1a8a02a2a9b545abee41
+  R22_CSS_SHA256: ac88ae83c6a713a816c5a7d8c04972d29cfc012337d1bf6f93e0847475ee5671
+
+jobs:
+  live-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout exact main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Verify sealed source before probing production
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(wc -l < release/r22-site.sha256)" -eq 53
+          test "$(find site -type f | wc -l)" -eq 53
+          (cd site && sha256sum -c ../release/r22-site.sha256)
+          node --input-type=module --check < site/_worker.js
+          node --input-type=module --check < site/_worker-r20.js
+          printf '%s  %s\n' '5484286837bc738233aba1fb42a335a43230fde72e7fb486b4455f7496cd76c7' 'site/_worker-r20.js' | sha256sum -c -
+
+      - name: Verify live R22 identity and immutable assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$RUNNER_TEMP/r22-live"; mkdir -p "$tmp"
+          nonce="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          curl -fsSL --retry 4 --retry-delay 2 "$SITE/build-info.json?gate=$nonce" -o "$tmp/build-info.json"
+          printf '%s  %s\n' "$BUILD_INFO_SHA256" "$tmp/build-info.json" | sha256sum -c -
+          curl -fsSL --retry 4 --retry-delay 2 "$SITE/sw.js?gate=$nonce" -o "$tmp/sw.js"
+          printf '%s  %s\n' "$SW_SHA256" "$tmp/sw.js" | sha256sum -c -
+          curl -fsSL --retry 4 --retry-delay 2 "$SITE/assets/r22-experience.fd8d4e4248f3.js?gate=$nonce" -o "$tmp/r22.js"
+          printf '%s  %s\n' "$R22_JS_SHA256" "$tmp/r22.js" | sha256sum -c -
+          curl -fsSL --retry 4 --retry-delay 2 "$SITE/assets/r22-experience.ac88ae83c6a7.css?gate=$nonce" -o "$tmp/r22.css"
+          printf '%s  %s\n' "$R22_CSS_SHA256" "$tmp/r22.css" | sha256sum -c -
+          BUILD="$EXPECTED_BUILD" FILE="$tmp/build-info.json" node - <<'NODE'
+          const fs = require('node:fs');
+          const info = JSON.parse(fs.readFileSync(process.env.FILE, 'utf8'));
+          if (info.build !== process.env.BUILD) throw new Error(`live build mismatch: ${info.build}`);
+          if (info.ai_binding !== 'AI') throw new Error('AI binding metadata mismatch');
+          if (info.commerce_planner !== 'deterministic-client-authoritative-zero-network-first') throw new Error('commerce planner drift');
+          NODE
+
+      - name: Verify private paths and security headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS -o /dev/null -w '%{http_code}' "$SITE/_worker-r20.js")"
+          [ "$code" = 404 ] || { echo "::error::Private R20 worker exposed: HTTP $code"; exit 1; }
+          headers="$RUNNER_TEMP/headers.txt"
+          curl -fsSL -D "$headers" -o /dev/null "$SITE/robots.txt?gate=${GITHUB_RUN_ID}"
+          tr -d '\r' < "$headers" > "$headers.clean"
+          grep -qi '^strict-transport-security: max-age=31536000' "$headers.clean"
+          grep -qi '^x-content-type-options: nosniff' "$headers.clean"
+          grep -qi '^x-frame-options: DENY' "$headers.clean"
+          grep -qi '^content-security-policy:' "$headers.clean"
+          grep -qi "^x-lovely-build: $EXPECTED_BUILD$" "$headers.clean"
+
+      - name: Verify status and zero-neuron commerce
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(curl -fsS "$SITE/api/lovely-status")"
+          STATUS="$status" node -e "const p=JSON.parse(process.env.STATUS||'{}'); if(p.ai!==true||p.runtime!=='unchecked') process.exit(1)"
+          client="securitygate${GITHUB_RUN_ID}a${GITHUB_RUN_ATTEMPT}"
+          body='{"question":"add one cappuccino","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
+          out="$RUNNER_TEMP/actions.json"
+          code="$(curl -sS -o "$out" -w '%{http_code}' -H "Origin: $SITE" -H 'Content-Type: application/json' -H "X-Lovely-Client: $client" --data "$body" "$SITE/api/lovely-actions")"
+          [ "$code" = 503 ] || { echo "::error::Commerce endpoint unexpectedly invoked AI: HTTP $code"; cat "$out"; exit 1; }
+          OUT="$(cat "$out")" node -e "const p=JSON.parse(process.env.OUT||'{}'); if(p.error!=='ai_unavailable') process.exit(1)"
+
+      - name: Verify cross-origin API isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          ai_body='{"question":"price of cappuccino","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
+          for path in lovely-ai lovely-actions; do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' -H 'Origin: https://evil.example' -H 'Content-Type: application/json' --data "$ai_body" "$SITE/api/$path")"
+            [ "$code" = 403 ] || { echo "::error::Cross-origin /api/$path not blocked: HTTP $code"; exit 1; }
+          done
+          code="$(curl -sS -o /dev/null -w '%{http_code}' -H 'Origin: https://evil.example' -H 'Content-Type: application/json' --data '{"event":"cart_view","page":"home","meta":{}}' "$SITE/api/lovely-events")"
+          [ "$code" = 403 ] || { echo "::error::Cross-origin telemetry not blocked: HTTP $code"; exit 1; }
+
+      - name: Verify telemetry allowlist and size guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/event.json"
+          code="$(curl -sS -o "$out" -w '%{http_code}' -H "Origin: $SITE" -H 'Content-Type: application/json' --data '{"event":"cart_view","page":"home","meta":{"count":1,"total":35}}' "$SITE/api/lovely-events")"
+          [ "$code" = 202 ] || { echo "::error::Allowed telemetry rejected: HTTP $code"; cat "$out"; exit 1; }
+          code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Origin: $SITE" -H 'Content-Type: application/json' --data '{"event":"free_form_customer_text","page":"home","meta":{}}' "$SITE/api/lovely-events")"
+          [ "$code" = 400 ] || { echo "::error::Unknown telemetry event accepted: HTTP $code"; exit 1; }
+          python3 - <<'PY' > "$RUNNER_TEMP/oversized.json"
+          import json
+          print(json.dumps({'event':'cart_view','page':'home','meta':{'padding':'x'*5000}}))
+          PY
+          code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Origin: $SITE" -H 'Content-Type: application/json' --data-binary @"$RUNNER_TEMP/oversized.json" "$SITE/api/lovely-events")"
+          [ "$code" = 413 ] || { echo "::error::Oversized telemetry not rejected: HTTP $code"; exit 1; }
+
+      - name: Verify home injection remains exact
+        shell: bash
+        run: |
+          set -euo pipefail
+          home="$RUNNER_TEMP/home.html"
+          curl -fsSL --retry 4 --retry-delay 2 "$SITE/?gate=${GITHUB_RUN_ID}" -o "$home"
+          grep -q '/assets/r22-experience.fd8d4e4248f3.js' "$home"
+          grep -q '/assets/r22-experience.ac88ae83c6a7.css' "$home"
+          grep -q 'data-build="lovely-live-source-r22-experience-hardening-20260913-r22"' "$home"
+
+      - name: Security gate summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '### R22 live security gate'
+            echo "- Commit checked: \`$GITHUB_SHA\`"
+            echo '- Source seal: checked'
+            echo '- Live immutable assets: checked'
+            echo '- Private rollback worker exposure: checked'
+            echo '- Security headers: checked'
+            echo '- Zero-neuron commerce: checked'
+            echo '- Cross-origin API isolation: checked'
+            echo '- Telemetry allowlist and size guard: checked'
+            echo '- Home R22 injection: checked'
+            echo '- Workers AI quota availability is intentionally not a pass/fail condition.'
+          } >> "$GITHUB_STEP_SUMMARY"
