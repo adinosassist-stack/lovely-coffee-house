@@ -1,6 +1,6 @@
 {
-  "build": "lovely-live-source-r20-header-consistency-20260912-r20",
-  "source": "Lovely Coffee House R19 + R20 release-header consistency hardening; JSON-object planner and deterministic commerce validation preserved",
+  "build": "lovely-live-source-r21-ai-quota-efficiency-20260913-r21",
+  "source": "Lovely Coffee House sealed R20 baseline + R21 Workers AI quota-efficiency wrapper; deterministic commerce fallback preserved and made authoritative for transaction planning",
   "frontend": {
     "css": "app.5ed8a120fc5b.css",
     "order": "home-order.316103234499.js",
@@ -9,10 +9,13 @@
     "rooms_booking": "rooms-booking.5523918c3abd.js",
     "rooms_ai": "lovely-rooms-ai.57af084298ec.js"
   },
-  "backend": "Cloudflare Pages Advanced Mode / Workers AI modular routes",
+  "backend": "Cloudflare Pages Advanced Mode / R21 wrapper + sealed R20 worker module",
   "sw_version": "2026-09-12-r20-header-consistency",
   "vat_enabled": false,
   "ai_binding": "AI",
-  "artifact": "release/r20-site.sha256",
-  "deploymentForm": "single-file-worker-direct-upload"
+  "commerce_planner": "deterministic-client-fallback-authoritative",
+  "ai_circuit_breaker_seconds": 300,
+  "artifact": "release/r21-site.sha256",
+  "rollback_artifact": "release/r20-site.sha256",
+  "deploymentForm": "bundled-module-worker-direct-upload"
 }

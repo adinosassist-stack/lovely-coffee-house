@@ -1,0 +1,26 @@
+Lovely Coffee House R21 — Workers AI Quota Efficiency Hardening
+
+Build: lovely-live-source-r21-ai-quota-efficiency-20260913-r21
+Date: 2026-09-13
+
+Purpose
+- Preserve the exact sealed R20 production worker as a byte-for-byte rollback module.
+- Stop spending Workers AI neurons on transaction planning.
+- Keep the existing deterministic client commerce engine authoritative for add/remove/swap/fulfilment/checkout.
+- Keep Workers AI available for genuine concierge, STT and TTS requests.
+- Add a five-minute server-side circuit breaker after AI/STT/TTS unavailable responses to reduce repeated failed provider calls and latency.
+
+Safety and compatibility
+- No menu, pricing, Rooms, PWA, UI, WhatsApp checkout, voice UX, security policy, rate-limit or health-safety rules were removed.
+- /api/lovely-actions is still passed through the sealed R20 validation, same-origin, rate-limit, emergency, logging and security-header path, but with the AI binding intentionally suppressed.
+- The sealed client fallback markers remain required by both source verification and the production gate.
+- The private legacy worker module is blocked from public access.
+- R20 rollback remains available through release/r20-site.sha256.
+
+Release seal
+- R21 site files: 51
+- R21 manifest: release/r21-site.sha256
+- R20 legacy worker SHA-256: 5484286837bc738233aba1fb42a335a43230fde72e7fb486b4455f7496cd76c7
+- R21 wrapper SHA-256: f2b2428cbf987eca607cb7ed90a703b8f1ef6e7803aa40c63d165fcdba368438
+- R21 build-info SHA-256: fd6b9793cb55fc686d656e4c17ad5c102b67924bd1f19e06dc23402150fbae05
+- R21 _headers SHA-256: 304426565eca8c1b7d8134bc757053427d155ab321397320dad9e89feea25ba6

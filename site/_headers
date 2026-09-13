@@ -8,7 +8,7 @@
   Cross-Origin-Resource-Policy: same-origin
   Origin-Agent-Cluster: ?1
   Strict-Transport-Security: max-age=31536000
-  X-Lovely-Build: lovely-live-source-r20-header-consistency-20260912-r20
+  X-Lovely-Build: lovely-live-source-r21-ai-quota-efficiency-20260913-r21
   Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; frame-src 'none'; worker-src 'self'; img-src 'self'; media-src 'self' blob:; style-src 'self'; style-src-attr 'none'; script-src 'self' 'sha256-WTNeKEJgfmEKZ5/HVXLCpuC/pByOTPcGaw1DkELwdes=' 'sha256-zd6du9ZixQQkVaHeSTYltUsEx5zvuDrhvmRuzWWLTog='; script-src-attr 'none'; connect-src 'self'; font-src 'self'; manifest-src 'self'; form-action 'self'; upgrade-insecure-requests
 
 /assets/*
