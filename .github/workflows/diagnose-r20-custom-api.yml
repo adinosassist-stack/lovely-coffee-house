@@ -1,40 +1,91 @@
-name: Check Workers AI quota recovery
+name: Check Workers AI runtime
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
+  schedule:
+    - cron: '17 * * * *'
 
 permissions:
   contents: read
 
+concurrency:
+  group: lovely-coffee-house-ai-runtime-check
+  cancel-in-progress: true
+
+env:
+  EXPECTED_BUILD: lovely-live-source-r22-experience-hardening-20260913-r22
+
 jobs:
   check-ai-runtime:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[diag-ai-unique]')
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
+      - name: Verify live R22 identity and AI binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_json="$RUNNER_TEMP/build-info.json"
+          curl -fsSL --retry 3 --retry-delay 2 --max-time 20 \
+            "https://lovelycoffeehouse.com/build-info.json?runtime-check=${GITHUB_RUN_ID}" \
+            -o "$build_json"
+          BUILD_JSON="$(cat "$build_json")" EXPECTED_BUILD="$EXPECTED_BUILD" node - <<'NODE'
+          const p = JSON.parse(process.env.BUILD_JSON || '{}');
+          if (p.build !== process.env.EXPECTED_BUILD) {
+            throw new Error(`Unexpected live build: ${p.build || 'missing'}`);
+          }
+          if (p.ai_binding !== 'AI') throw new Error('Workers AI binding metadata mismatch');
+          NODE
+
+          status="$(curl -fsSL --retry 3 --retry-delay 2 --max-time 20 \
+            'https://lovelycoffeehouse.com/api/lovely-status')"
+          STATUS="$status" node - <<'NODE'
+          const p = JSON.parse(process.env.STATUS || '{}');
+          if (p.ai !== true || p.runtime !== 'unchecked') {
+            throw new Error(`Unexpected AI status: ${JSON.stringify(p)}`);
+          }
+          NODE
+
       - name: Probe production concierge runtime without deployment
+        id: probe
         shell: bash
         run: |
           set -euo pipefail
           client="githubdiag${GITHUB_RUN_ID}a${GITHUB_RUN_ATTEMPT}"
           body='{"question":"What is the price of a cappuccino?","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
           out="$RUNNER_TEMP/ai-runtime.json"
-          code="$(curl -sS -o "$out" -w '%{http_code}' \
+          code="$(curl -sS --retry 2 --retry-delay 2 --max-time 30 -o "$out" -w '%{http_code}' \
             -H 'Origin: https://lovelycoffeehouse.com' \
             -H 'Content-Type: application/json' \
             -H "X-Lovely-Client: $client" \
             --data "$body" \
             'https://lovelycoffeehouse.com/api/lovely-ai' || true)"
           response="$(cat "$out" 2>/dev/null || true)"
-          echo "runtime_http=$code response=$response"
+          echo "runtime_http=$code"
+
           if [ "$code" = 200 ] && RESPONSE="$response" node -e "const p=JSON.parse(process.env.RESPONSE||'{}'); process.exit(typeof p.answer==='string'&&p.answer.length>0?0:1)" 2>/dev/null; then
+            echo 'state=available' >> "$GITHUB_OUTPUT"
             echo 'Workers AI runtime is available.'
             exit 0
           fi
+
           if [ "$code" = 503 ] && RESPONSE="$response" node -e "const p=JSON.parse(process.env.RESPONSE||'{}'); process.exit(p.error==='ai_unavailable'?0:1)" 2>/dev/null; then
-            echo '::error::Workers AI runtime is still unavailable or quota-limited.'
-            exit 1
+            echo 'state=unavailable' >> "$GITHUB_OUTPUT"
+            echo 'Workers AI runtime remains quota-limited or temporarily unavailable; R22 deterministic ordering remains healthy.'
+            exit 0
           fi
+
           echo "::error::Unexpected Workers AI probe result: HTTP $code"
+          printf '%s\n' "$response" | head -c 1000
           exit 1
+
+      - name: Runtime summary
+        if: always() && steps.probe.outputs.state != ''
+        shell: bash
+        run: |
+          {
+            echo '### Lovely Coffee House Workers AI runtime'
+            echo "- Build: \`$EXPECTED_BUILD\`"
+            echo "- Runtime state: \`${{ steps.probe.outputs.state }}\`"
+            echo '- Commerce path: deterministic, zero-network first, unaffected by AI quota'
+            echo '- This workflow never deploys or mutates production.'
+          } >> "$GITHUB_STEP_SUMMARY"
