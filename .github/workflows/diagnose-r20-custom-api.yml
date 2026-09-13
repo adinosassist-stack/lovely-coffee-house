@@ -11,160 +11,149 @@ jobs:
   diagnose:
     if: contains(github.event.head_commit.message, '[diag-r20-custom]')
     runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_PROJECT: lovelycoffeehouse
+      WRANGLER_VERSION: 4.131.0
     steps:
-      - name: Inspect Cloudflare zone and Pages domain scope
+      - name: Checkout sealed source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Prepare production Pages config
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-          api='https://api.cloudflare.com/client/v4'
-          token="$(printf '%s' "$CLOUDFLARE_API_TOKEN" | tr -d '\r\n')"
-          acct="$(printf '%s' "$CLOUDFLARE_ACCOUNT_ID" | tr -d '[:space:]')"
-          hdr=( -H "Authorization: Bearer $token" )
+          CLOUDFLARE_API_TOKEN="$(printf '%s' "$CLOUDFLARE_API_TOKEN" | tr -d '\r\n')"
+          CLOUDFLARE_ACCOUNT_ID="$(printf '%s' "$CLOUDFLARE_ACCOUNT_ID" | tr -d '[:space:]')"
+          export CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
+          {
+            printf 'CLOUDFLARE_API_TOKEN=%s\n' "$CLOUDFLARE_API_TOKEN"
+            printf 'CLOUDFLARE_ACCOUNT_ID=%s\n' "$CLOUDFLARE_ACCOUNT_ID"
+          } >> "$GITHUB_ENV"
+          rm -f wrangler.toml wrangler.json wrangler.jsonc
+          npx --yes "wrangler@${WRANGLER_VERSION}" pages download config "$CLOUDFLARE_PROJECT" --force
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('wrangler.toml')
+          t=p.read_text()
+          line='pages_build_output_dir = "./site"'
+          t=re.sub(r'^[ \t]*pages_build_output_dir[ \t]*=.*$',line,t,flags=re.M) if re.search(r'^[ \t]*pages_build_output_dir[ \t]*=.*$',t,flags=re.M) else line+'\n'+t
+          def bind(text, table):
+              pat=rf'^[ \t]*\[{re.escape(table)}\][ \t]*$'
+              if not re.search(pat,text,flags=re.M):
+                  return text.rstrip()+f'\n\n[{table}]\nbinding = "AI"\n'
+              m=re.search(pat,text,flags=re.M); start=m.end()
+              n=re.search(r'^[ \t]*\[[^\]]+\][ \t]*$',text[start:],flags=re.M); end=start+n.start() if n else len(text)
+              body=text[start:end]
+              body=re.sub(r'^[ \t]*binding[ \t]*=.*$','binding = "AI"',body,count=1,flags=re.M) if re.search(r'^[ \t]*binding[ \t]*=.*$',body,flags=re.M) else '\nbinding = "AI"'+body
+              return text[:start]+body+text[end:]
+          t=bind(t,'ai')
+          if re.search(r'^[ \t]*\[env\.production\][ \t]*$',t,flags=re.M):
+              t=bind(t,'env.production.ai')
+          p.write_text(t)
+          PY
+          grep -q '^\[ai\]$' wrangler.toml
 
-          echo '--- Pages project/domain visibility ---'
-          project="$RUNNER_TEMP/project.json"
-          pcode="$(curl -sS -o "$project" -w '%{http_code}' "${hdr[@]}" "$api/accounts/$acct/pages/projects/lovelycoffeehouse")"
-          echo "pages_project_http=$pcode"
-          PROJECT="$(cat "$project")" node - <<'NODE'
-          const p=JSON.parse(process.env.PROJECT||'{}');
-          console.log('pages_project_success='+(p.success===true));
-          if (p.result) {
-            console.log('pages_project_name='+(p.result.name||'unknown'));
-            const domains=Array.isArray(p.result.domains)?p.result.domains:[];
-            console.log('pages_domains_count='+domains.length);
-            for (const d of domains) console.log('pages_domain='+d);
-          }
-          for(const e of p.errors||[]) console.log(`pages_error=${e.code}:${e.message}`);
-          NODE
-
-          echo '--- Zone lookup without account filter ---'
-          zones="$RUNNER_TEMP/zones.json"
-          zcode="$(curl -sS -o "$zones" -w '%{http_code}' "${hdr[@]}" "$api/zones?name=lovelycoffeehouse.com&per_page=50")"
-          echo "zones_lookup_http=$zcode"
-          ZONES="$(cat "$zones")" node - <<'NODE' > "$RUNNER_TEMP/zone.env"
-          const p=JSON.parse(process.env.ZONES||'{}');
-          console.error('zones_success='+(p.success===true));
-          console.error('zones_count='+((p.result||[]).length));
-          for(const e of p.errors||[]) console.error(`zones_error=${e.code}:${e.message}`);
-          for(const z of p.result||[]) {
-            console.error(`zone_name=${z.name}; zone_status=${z.status}; account_match=${String(z.account?.id||'')===String(process.env.CLOUDFLARE_ACCOUNT_ID||'')}`);
-            if(z.name==='lovelycoffeehouse.com') console.log(`ZONE_ID=${z.id}`);
-          }
-          NODE
-
-          if ! grep -q '^ZONE_ID=' "$RUNNER_TEMP/zone.env"; then
-            echo 'zone_resolution=missing'
-            echo 'diagnosis=Token can reach Pages but cannot resolve the lovelycoffeehouse.com zone. Check token Zone resources/Zone Read permission and whether the zone is in the same Cloudflare account.'
-            exit 0
-          fi
-          source "$RUNNER_TEMP/zone.env"
-          echo 'zone_resolution=found'
-
-          echo '--- Security settings ---'
-          for setting in browser_check security_level challenge_ttl; do
-            out="$RUNNER_TEMP/$setting.json"
-            code="$(curl -sS -o "$out" -w '%{http_code}' "${hdr[@]}" "$api/zones/$ZONE_ID/settings/$setting")"
-            echo "setting_${setting}_http=$code"
-            SETTING="$(cat "$out")" SETTING_ID="$setting" node - <<'NODE'
-          const p=JSON.parse(process.env.SETTING||'{}');
-          if (p.success===true) console.log(`${process.env.SETTING_ID}=${JSON.stringify(p.result?.value)}`);
-          for(const e of p.errors||[]) console.log(`${process.env.SETTING_ID}_error=${e.code}:${e.message}`);
-          NODE
-          done
-
-          bot="$RUNNER_TEMP/bot.json"
-          bcode="$(curl -sS -o "$bot" -w '%{http_code}' "${hdr[@]}" "$api/zones/$ZONE_ID/bot_management")"
-          echo "bot_management_http=$bcode"
-          BOT="$(cat "$bot")" node - <<'NODE'
-          const p=JSON.parse(process.env.BOT||'{}');
-          const r=p.result||{};
-          for(const k of ['fight_mode','sbfm_likely_automated','sbfm_definitely_automated','sbfm_static_resource_protection','sbfm_verified_bots','enable_js','content_bots_protection']) if(k in r) console.log(`${k}=${JSON.stringify(r[k])}`);
-          for(const e of p.errors||[]) console.log(`bot_error=${e.code}:${e.message}`);
-          NODE
-
-          rules="$RUNNER_TEMP/rulesets.json"
-          rcode="$(curl -sS -o "$rules" -w '%{http_code}' "${hdr[@]}" "$api/zones/$ZONE_ID/rulesets")"
-          echo "rulesets_http=$rcode"
-          RULES="$(cat "$rules")" node - <<'NODE'
-          const p=JSON.parse(process.env.RULES||'{}');
-          for(const r of p.result||[]) if(['http_request_firewall_custom','http_request_firewall_managed','http_request_sbfm'].includes(r.phase)) console.log(`ruleset=${r.phase}:${r.id}:${r.name}`);
-          for(const e of p.errors||[]) console.log(`rulesets_error=${e.code}:${e.message}`);
-          NODE
-
-      - name: Map challenge scope by path
+      - name: Confirm custom-domain failure surface
         shell: bash
         run: |
           set -euo pipefail
           probe() {
             local label="$1" url="$2"; shift 2
-            local hdr="$RUNNER_TEMP/$label.hdr" body="$RUNNER_TEMP/$label.body"
-            local code
-            code="$(curl -sS -D "$hdr" -o "$body" -w '%{http_code}' "$@" "$url" || true)"
-            local mitigated='no'
-            grep -qi '^cf-mitigated: challenge' "$hdr" && mitigated='yes'
-            local ctype
-            ctype="$(grep -i '^content-type:' "$hdr" | tail -n1 | tr -d '\r' | cut -d' ' -f2- || true)"
+            local hdr="$RUNNER_TEMP/$label.hdr" body="$RUNNER_TEMP/$label.body" code
+            code="$(curl --max-time 20 -sS -D "$hdr" -o "$body" -w '%{http_code}' "$@" "$url" || true)"
+            local mitigated='no'; grep -qi '^cf-mitigated: challenge' "$hdr" && mitigated='yes'
+            local ctype; ctype="$(grep -i '^content-type:' "$hdr" | tail -n1 | tr -d '\r' | cut -d' ' -f2- || true)"
             echo "$label http=$code challenge=$mitigated content_type=${ctype:-none}"
           }
-
           base='https://lovelycoffeehouse.com'
-          probe home "$base/"
-          probe robots "$base/robots.txt?diag=scope"
-          probe missing "$base/definitely-not-a-real-page-r20"
-          probe api_missing "$base/api/not-a-real-route-r20"
           probe status "$base/api/lovely-status"
-          probe status_origin "$base/api/lovely-status" -H 'Origin: https://lovelycoffeehouse.com' -H 'Sec-Fetch-Site: same-origin' -H 'Sec-Fetch-Mode: cors' -H 'User-Agent: Mozilla/5.0'
-          probe planner_options "$base/api/lovely-actions" -X OPTIONS -H 'Origin: https://lovelycoffeehouse.com' -H 'Access-Control-Request-Method: POST' -H 'Sec-Fetch-Site: same-origin' -H 'User-Agent: Mozilla/5.0'
-
           planner='{"question":"add one cappuccino","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
           probe planner_post "$base/api/lovely-actions" \
             -H 'Origin: https://lovelycoffeehouse.com' \
             -H 'Sec-Fetch-Site: same-origin' \
             -H 'Sec-Fetch-Mode: cors' \
             -H 'Content-Type: application/json' \
-            -H 'X-Lovely-Client: githubdiagpost20260913' \
+            -H 'X-Lovely-Client: githubruntimepre20260913' \
             -H 'User-Agent: Mozilla/5.0' \
             --data "$planner"
-          printf 'planner_post_body='; head -c 1000 "$RUNNER_TEMP/planner_post.body" | tr '\r\n' ' '; echo
-          printf 'status_body='; head -c 500 "$RUNNER_TEMP/status.body" | tr '\r\n' ' '; echo
+          printf 'planner_post_body='; head -c 700 "$RUNNER_TEMP/planner_post.body" | tr '\r\n' ' '; echo
+          printf 'status_body='; head -c 400 "$RUNNER_TEMP/status.body" | tr '\r\n' ' '; echo
 
-      - name: Test Workers AI provider directly
+      - name: Patch status endpoint for one sanitized AI runtime probe
         shell: bash
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-          token="$(printf '%s' "$CLOUDFLARE_API_TOKEN" | tr -d '\r\n')"
-          acct="$(printf '%s' "$CLOUDFLARE_ACCOUNT_ID" | tr -d '[:space:]')"
-          api='https://api.cloudflare.com/client/v4'
+          cp site/_worker.js "$RUNNER_TEMP/original-worker.js"
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('site/_worker.js')
+          t=p.read_text()
+          old="const M_worker_routes_status = (() => {\nconst { aiBindingReady } = M_worker_lib_ai;\nconst { apiJson } = M_worker_lib_security;\nasync function handleStatus({ env }) {\n  // Status checks must never spend Workers AI neurons. Runtime health is verified\n  // by an actual planner request in the production gate instead.\n  return apiJson({ ai: aiBindingReady(env), runtime: 'unchecked' });\n}\nreturn { handleStatus };\n})();"
+          new="const M_worker_routes_status = (() => {\nconst { aiBindingReady } = M_worker_lib_ai;\nconst { apiJson } = M_worker_lib_security;\nasync function handleStatus({ env }) {\n  const binding = aiBindingReady(env);\n  if (!binding) return apiJson({ ai:false, binding:false, runtime:'binding_missing' });\n  try {\n    const result = await env.AI.run('@cf/meta/llama-3.1-8b-instruct-fast', { messages:[{ role:'user', content:'Reply OK.' }], max_tokens:8, temperature:0 });\n    return apiJson({ ai:Boolean(result), binding:true, runtime:'ok', resultKeys:result && typeof result === 'object' ? Object.keys(result).slice(0,12) : [] });\n  } catch (error) {\n    const cause = error && error.cause ? error.cause : null;\n    const code = error && (error.code ?? error.status) != null ? (error.code ?? error.status) : (cause && (cause.code ?? cause.status) != null ? (cause.code ?? cause.status) : '');\n    const message = String((error && error.message) || (cause && cause.message) || (error && error.name) || 'runtime_error').replace(/[\\r\\n]+/g,' ').slice(0,260);\n    const causeMessage = String((cause && cause.message) || '').replace(/[\\r\\n]+/g,' ').slice(0,220);\n    return apiJson({ ai:false, binding:true, runtime:'error', code:String(code).slice(0,50), message, causeMessage });\n  }\n}\nreturn { handleStatus };\n})();"
+          if old not in t:
+              raise SystemExit('quota-safe status module target not found')
+          p.write_text(t.replace(old,new,1))
+          PY
+          node --check site/_worker.js
 
-          call_model() {
-            local label="$1" model="$2" payload="$3"
-            local out="$RUNNER_TEMP/${label}.json" code
-            code="$(curl -sS -o "$out" -w '%{http_code}' -X POST \
-              -H "Authorization: Bearer $token" \
-              -H 'Content-Type: application/json' \
-              --data "$payload" \
-              "$api/accounts/$acct/ai/run/$model" || true)"
-            echo "${label}_http=$code"
-            AI_RESULT="$(cat "$out" 2>/dev/null || printf '{}')" LABEL="$label" node - <<'NODE'
-          let p={}; try { p=JSON.parse(process.env.AI_RESULT||'{}'); } catch (_) {}
-          const label=process.env.LABEL;
-          console.log(`${label}_success=${p.success===true}`);
-          const errors=Array.isArray(p.errors)?p.errors:[];
-          if(!errors.length) console.log(`${label}_error=none`);
-          for(const e of errors) console.log(`${label}_error=${e.code||'unknown'}:${String(e.message||'unknown').replace(/[\r\n]+/g,' ').slice(0,220)}`);
-          const result=p.result;
-          if(result && typeof result==='object') console.log(`${label}_result_keys=${Object.keys(result).join(',')}`);
-          NODE
-          }
+      - name: Deploy temporary runtime diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes "wrangler@${WRANGLER_VERSION}" pages deploy site \
+            --project-name="$CLOUDFLARE_PROJECT" \
+            --branch=main \
+            --commit-hash="$GITHUB_SHA" \
+            --commit-message="Temporary Workers AI runtime diagnostic $GITHUB_SHA"
 
-          basic='{"messages":[{"role":"user","content":"Reply OK."}],"max_tokens":8,"temperature":0}'
-          json='{"messages":[{"role":"user","content":"Return a JSON object with ok set to true."}],"max_tokens":16,"temperature":0,"response_format":{"type":"json_object"}}'
-          call_model current_basic '@cf/meta/llama-3.1-8b-instruct-fast' "$basic"
-          call_model current_json '@cf/meta/llama-3.1-8b-instruct-fast' "$json"
-          call_model glm_basic '@cf/zai-org/glm-4.7-flash' "$basic"
+      - name: Read sanitized Workers AI runtime error
+        shell: bash
+        run: |
+          set -euo pipefail
+          seen=false
+          for i in {1..15}; do
+            body="$(curl --max-time 25 -fsS 'https://lovelycoffeehouse.com/api/lovely-status?runtime_diag=1' 2>/dev/null || true)"
+            echo "runtime_probe_attempt=$i body=$body"
+            if BODY="$body" node -e "const p=JSON.parse(process.env.BODY||'{}');process.exit(['ok','error','binding_missing'].includes(p.runtime)?0:1)" 2>/dev/null; then
+              seen=true
+              break
+            fi
+            sleep 2
+          done
+          [ "$seen" = true ] || { echo '::error::Temporary runtime diagnostic did not propagate'; exit 1; }
+
+      - name: Restore sealed production worker
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f "$RUNNER_TEMP/original-worker.js" ]; then
+            echo '::error::Original worker backup missing; refusing to alter production further'
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/original-worker.js" site/_worker.js
+          node --check site/_worker.js
+          (cd site && sha256sum -c ../release/r20-site.sha256)
+          npx --yes "wrangler@${WRANGLER_VERSION}" pages deploy site \
+            --project-name="$CLOUDFLARE_PROJECT" \
+            --branch=main \
+            --commit-hash="$GITHUB_SHA" \
+            --commit-message="Restore sealed R20 worker after AI runtime diagnostic $GITHUB_SHA"
+
+      - name: Verify sealed worker restored
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in {1..15}; do
+            body="$(curl --max-time 15 -fsS 'https://lovelycoffeehouse.com/api/lovely-status?restore_check=1' 2>/dev/null || true)"
+            echo "restore_attempt=$i body=$body"
+            if BODY="$body" node -e "const p=JSON.parse(process.env.BODY||'{}');process.exit(p.ai===true&&p.runtime==='unchecked'?0:1)" 2>/dev/null; then exit 0; fi
+            sleep 2
+          done
+          echo '::error::Sealed quota-safe status endpoint did not restore'
+          exit 1
