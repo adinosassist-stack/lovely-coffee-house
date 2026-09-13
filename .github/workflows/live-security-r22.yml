@@ -17,6 +17,7 @@ concurrency:
 env:
   SITE: https://lovelycoffeehouse.com
   EXPECTED_BUILD: lovely-live-source-r22-experience-hardening-20260913-r22
+  EXPECTED_HARDENING: r22-runtime-shield-20260913-h1
   BUILD_INFO_SHA256: d56c4ffd444e00534c01d2878857d48e0ca858abb78b65da7a953e3cbf27b1fd
   SW_SHA256: ad7701dbb83f283b779205cf8ff955faa495104c830b9ed600aee00df87d215d
   R22_JS_SHA256: fd8d4e4248f394107bba1fe6fc9e27de6ec6a77c129d1a8a02a2a9b545abee41
@@ -40,6 +41,11 @@ jobs:
           node --input-type=module --check < site/_worker.js
           node --input-type=module --check < site/_worker-r20.js
           printf '%s  %s\n' '5484286837bc738233aba1fb42a335a43230fde72e7fb486b4455f7496cd76c7' 'site/_worker-r20.js' | sha256sum -c -
+          grep -q "HARDENING_ID = 'r22-runtime-shield-20260913-h1'" site/_worker.js
+          grep -q 'strictSameOriginRequest' site/_worker.js
+          grep -q 'AI_BACKOFF_MS' site/_worker.js
+          grep -q "'X-Lovely-Hardening'" site/_worker.js
+          grep -q "'X-Lovely-AI-State'" site/_worker.js
 
       - name: Verify live R22 identity and immutable assets
         shell: bash
@@ -77,6 +83,21 @@ jobs:
           grep -qi '^x-frame-options: DENY' "$headers.clean"
           grep -qi '^content-security-policy:' "$headers.clean"
           grep -qi "^x-lovely-build: $EXPECTED_BUILD$" "$headers.clean"
+          grep -qi "^x-lovely-hardening: $EXPECTED_HARDENING$" "$headers.clean"
+
+      - name: Verify runtime provenance shield
+        shell: bash
+        run: |
+          set -euo pipefail
+          ai_body='{"question":"price of cappuccino","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
+          for path in lovely-ai lovely-actions; do
+            headers="$RUNNER_TEMP/no-origin-$path.headers"
+            code="$(curl -sS -D "$headers" -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data "$ai_body" "$SITE/api/$path")"
+            [ "$code" = 403 ] || { echo "::error::No-provenance /api/$path not blocked: HTTP $code"; exit 1; }
+            tr -d '\r' < "$headers" | grep -qi "^x-lovely-hardening: $EXPECTED_HARDENING$"
+          done
+          code="$(curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data '{"event":"cart_view","page":"home","meta":{}}' "$SITE/api/lovely-events")"
+          [ "$code" = 403 ] || { echo "::error::No-provenance telemetry not blocked: HTTP $code"; exit 1; }
 
       - name: Verify status and zero-neuron commerce
         shell: bash
@@ -87,9 +108,13 @@ jobs:
           client="securitygate${GITHUB_RUN_ID}a${GITHUB_RUN_ATTEMPT}"
           body='{"question":"add one cappuccino","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
           out="$RUNNER_TEMP/actions.json"
-          code="$(curl -sS -o "$out" -w '%{http_code}' -H "Origin: $SITE" -H 'Content-Type: application/json' -H "X-Lovely-Client: $client" --data "$body" "$SITE/api/lovely-actions")"
+          headers="$RUNNER_TEMP/actions.headers"
+          code="$(curl -sS -D "$headers" -o "$out" -w '%{http_code}' -H "Origin: $SITE" -H 'Content-Type: application/json' -H "X-Lovely-Client: $client" --data "$body" "$SITE/api/lovely-actions")"
           [ "$code" = 503 ] || { echo "::error::Commerce endpoint unexpectedly invoked AI: HTTP $code"; cat "$out"; exit 1; }
           OUT="$(cat "$out")" node -e "const p=JSON.parse(process.env.OUT||'{}'); if(p.error!=='ai_unavailable') process.exit(1)"
+          tr -d '\r' < "$headers" > "$headers.clean"
+          grep -qi "^x-lovely-hardening: $EXPECTED_HARDENING$" "$headers.clean"
+          grep -qi '^x-lovely-ai-state: commerce-local$' "$headers.clean"
 
       - name: Verify cross-origin API isolation
         shell: bash
@@ -139,8 +164,9 @@ jobs:
             echo '- Source seal: checked'
             echo '- Live immutable assets: checked'
             echo '- Private rollback worker exposure: checked'
-            echo '- Security headers: checked'
-            echo '- Zero-neuron commerce: checked'
+            echo '- Security + runtime hardening headers: checked'
+            echo '- No-provenance API isolation: checked'
+            echo '- Zero-neuron commerce + explicit AI state: checked'
             echo '- Cross-origin API isolation: checked'
             echo '- Telemetry allowlist and size guard: checked'
             echo '- Home R22 injection: checked'
