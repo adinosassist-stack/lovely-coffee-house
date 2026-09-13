@@ -1,0 +1,5 @@
+Lovely Coffee House R20 GitHub Actions reconnect retry
+Date: 2026-09-13
+Purpose: Trigger a fresh production deployment after restoring the ChatGPT GitHub connection and observing startup_failure runs that created zero jobs.
+Sealed R20 site files are intentionally unchanged.
+Previous diagnostic head: 09b4dfa15d448fd56c8757ce03589e7170ed6e0c
