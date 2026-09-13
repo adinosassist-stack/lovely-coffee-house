@@ -1,12 +1,12 @@
-// Lovely Coffee House R22 - experience hardening wrapper
-// Preserves the sealed R20 worker and R21 zero-neuron commerce architecture.
-// Adds a same-origin, no-PII experience telemetry endpoint and injects the
-// sealed R22 client experience layer into the home page response.
+// Lovely Coffee House R22 - runtime shield hardening
+// Preserves the sealed R20 worker and R21/R22 zero-neuron commerce architecture.
+// Adds strict browser provenance, early body-size guards, adaptive AI provider backoff,
+// hardened telemetry, and explicit runtime state headers without changing customer UX.
 
 import r20 from './_worker-r20.js';
 
 const BUILD_ID = 'lovely-live-source-r22-experience-hardening-20260913-r22';
-const AI_COOLDOWN_MS = 5 * 60 * 1000;
+const HARDENING_ID = 'r22-runtime-shield-20260913-h1';
 const R22_JS = '/assets/r22-experience.fd8d4e4248f3.js';
 const R22_CSS = '/assets/r22-experience.ac88ae83c6a7.css';
 const AI_RUNTIME_ROUTES = new Set([
@@ -14,24 +14,47 @@ const AI_RUNTIME_ROUTES = new Set([
   '/api/lovely-tts',
   '/api/lovely-stt',
 ]);
+const STRICT_API_ROUTES = new Set([
+  '/api/lovely-ai',
+  '/api/lovely-actions',
+  '/api/lovely-tts',
+  '/api/lovely-stt',
+  '/api/lovely-events',
+]);
+const ROUTE_BODY_LIMITS = new Map([
+  ['/api/lovely-ai', 64 * 1024],
+  ['/api/lovely-actions', 64 * 1024],
+  ['/api/lovely-tts', 16 * 1024],
+  ['/api/lovely-stt', 5 * 1024 * 1024],
+  ['/api/lovely-events', 4096],
+]);
+const AI_BACKOFF_MS = [5, 15, 30, 60].map((minutes) => minutes * 60 * 1000);
 const TELEMETRY_EVENTS = new Set([
   'ai_open','commerce_local_route','drink_finder_open','drink_recommend',
   'meeting_planner_open','meeting_plan','meeting_plan_add','cart_view',
   'whatsapp_checkout','repeat_order_shown','repeat_order_add',
 ]);
-const cooldownUntil = new Map();
+const aiFailures = new Map();
 const telemetryBuckets = new Map();
 const TELEMETRY_WINDOW_MS = 5 * 60 * 1000;
-const TELEMETRY_LIMIT = 120;
+const TELEMETRY_LIMIT = 60;
 const TELEMETRY_MAX_BUCKETS = 2048;
 
 function envWithoutAi(env) {
   return { ...env, AI: null };
 }
 
-function withBuildHeader(response) {
-  const headers = new Headers(response.headers);
-  headers.set('X-Lovely-Build', BUILD_ID);
+function hardenedHeaders(headers, aiState = null) {
+  const out = new Headers(headers);
+  out.set('X-Lovely-Build', BUILD_ID);
+  out.set('X-Lovely-Hardening', HARDENING_ID);
+  if (aiState) out.set('X-Lovely-AI-State', aiState);
+  return out;
+}
+
+function withBuildHeader(response, aiState = null, extra = {}) {
+  const headers = hardenedHeaders(response.headers, aiState);
+  for (const [key, value] of Object.entries(extra)) headers.set(key, String(value));
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -47,6 +70,7 @@ function apiHeaders(extra = {}) {
     'Referrer-Policy': 'no-referrer',
     'X-Frame-Options': 'DENY',
     'X-Lovely-Build': BUILD_ID,
+    'X-Lovely-Hardening': HARDENING_ID,
     ...extra,
   });
 }
@@ -74,13 +98,39 @@ async function responseIsAiUnavailable(response) {
   }
 }
 
+function exactOrigin(request) {
+  try { return new URL(request.url).origin; } catch { return ''; }
+}
+
 function sameOriginRequest(request) {
-  let requestOrigin = '';
-  try { requestOrigin = new URL(request.url).origin; } catch { return false; }
+  const requestOrigin = exactOrigin(request);
+  if (!requestOrigin) return false;
   const origin = request.headers.get('Origin');
   if (origin && origin !== requestOrigin) return false;
   const fetchSite = String(request.headers.get('Sec-Fetch-Site') || '').toLowerCase();
   return fetchSite !== 'cross-site';
+}
+
+function trustedBrowserProvenance(request) {
+  if (request.method === 'OPTIONS') return true;
+  const requestOrigin = exactOrigin(request);
+  if (!requestOrigin) return false;
+  const origin = request.headers.get('Origin');
+  if (origin) return origin === requestOrigin;
+  const fetchSite = String(request.headers.get('Sec-Fetch-Site') || '').toLowerCase();
+  return fetchSite === 'same-origin' || fetchSite === 'none';
+}
+
+function earlyBodyGuard(request, pathname) {
+  const limit = ROUTE_BODY_LIMITS.get(pathname);
+  if (!limit || request.method === 'GET' || request.method === 'HEAD' || request.method === 'OPTIONS') return null;
+  const raw = request.headers.get('Content-Length');
+  if (!raw) return null;
+  if (!/^\d+$/.test(raw)) return apiJson({ error: 'invalid_content_length' }, 400);
+  const length = Number(raw);
+  if (!Number.isSafeInteger(length) || length < 0) return apiJson({ error: 'invalid_content_length' }, 400);
+  if (length > limit) return apiJson({ error: 'body_too_large' }, 413);
+  return null;
 }
 
 function telemetryRateLimit(request) {
@@ -142,6 +192,47 @@ async function handleTelemetry(request) {
   return apiJson({ accepted: true }, 202);
 }
 
+function currentAiFailure(pathname) {
+  const record = aiFailures.get(pathname);
+  if (!record) return null;
+  if (record.until <= Date.now()) return { ...record, cooling: false };
+  return { ...record, cooling: true };
+}
+
+function noteAiFailure(pathname) {
+  const previous = aiFailures.get(pathname);
+  const failures = Math.min((previous?.failures || 0) + 1, AI_BACKOFF_MS.length);
+  const delay = AI_BACKOFF_MS[failures - 1];
+  const record = { failures, until: Date.now() + delay };
+  aiFailures.set(pathname, record);
+  return record;
+}
+
+function clearAiFailure(pathname) {
+  aiFailures.delete(pathname);
+}
+
+async function handleAiRuntime(request, env, pathname) {
+  const failure = currentAiFailure(pathname);
+  if (failure?.cooling) {
+    const retry = Math.max(1, Math.ceil((failure.until - Date.now()) / 1000));
+    return withBuildHeader(await r20.fetch(request, envWithoutAi(env)), 'cooldown', { 'Retry-After': retry });
+  }
+
+  const response = await r20.fetch(request, env);
+  if (await responseIsAiUnavailable(response)) {
+    const record = noteAiFailure(pathname);
+    const retry = Math.max(1, Math.ceil((record.until - Date.now()) / 1000));
+    return withBuildHeader(response, 'unavailable', { 'Retry-After': retry });
+  }
+  if (response.status >= 200 && response.status < 300) {
+    clearAiFailure(pathname);
+    return withBuildHeader(response, 'ready');
+  }
+  if (response.status >= 400 && response.status < 500) return withBuildHeader(response, 'rejected');
+  return withBuildHeader(response, 'error');
+}
+
 async function injectHomeExperience(response) {
   const type = String(response.headers.get('Content-Type') || '').toLowerCase();
   if (response.status !== 200 || !type.includes('text/html')) return withBuildHeader(response);
@@ -149,8 +240,7 @@ async function injectHomeExperience(response) {
   if (!html.includes(R22_CSS)) html = html.replace('</head>', `<link href="${R22_CSS}" rel="stylesheet"/></head>`);
   if (!html.includes(R22_JS)) html = html.replace('</body>', `<script defer src="${R22_JS}"></script></body>`);
   html = html.replace(/<body\s+data-build="[^"]*"/i, `<body data-build="${BUILD_ID}"`);
-  const headers = new Headers(response.headers);
-  headers.set('X-Lovely-Build', BUILD_ID);
+  const headers = hardenedHeaders(response.headers);
   headers.set('Cache-Control', 'no-cache');
   headers.delete('Content-Length');
   headers.delete('ETag');
@@ -164,6 +254,17 @@ export default {
     // Deploy-time rollback code is never exposed as a static asset.
     if (url.pathname === '/_worker-r20.js') return sealedPrivate404(request, env);
 
+    // Paid/state-changing browser API routes require provenance. This blocks direct scripted
+    // anonymous calls that omit both Origin and Fetch Metadata while preserving normal browser use.
+    if (STRICT_API_ROUTES.has(url.pathname) && !trustedBrowserProvenance(request)) {
+      return apiJson({ error: 'request_provenance_required' }, 403, { 'X-Lovely-AI-State': 'rejected' });
+    }
+
+    // Reject declared oversized bodies before they reach the sealed worker/provider. The R20
+    // streaming reader remains the authoritative fallback for chunked or missing lengths.
+    const earlyBodyError = earlyBodyGuard(request, url.pathname);
+    if (earlyBodyError) return earlyBodyError;
+
     // Privacy-minimal first-party funnel events. No free-form customer text or identifiers
     // are accepted; only a strict event allowlist and bounded scalar metadata are logged.
     if (url.pathname === '/api/lovely-events') return handleTelemetry(request);
@@ -171,19 +272,12 @@ export default {
     // Never spend Workers AI neurons on transaction planning. The sealed deterministic
     // client order engine remains authoritative for add/remove/swap/fulfilment/checkout.
     if (url.pathname === '/api/lovely-actions') {
-      return withBuildHeader(await r20.fetch(request, envWithoutAi(env)));
+      return withBuildHeader(await r20.fetch(request, envWithoutAi(env)), 'commerce-local');
     }
 
-    // AI/STT/TTS provider circuit breaker. After a provider failure, use the validated
-    // unavailable path for five minutes before probing the provider again.
-    if (AI_RUNTIME_ROUTES.has(url.pathname)) {
-      const until = cooldownUntil.get(url.pathname) || 0;
-      if (until > Date.now()) return withBuildHeader(await r20.fetch(request, envWithoutAi(env)));
-      const response = await r20.fetch(request, env);
-      if (await responseIsAiUnavailable(response)) cooldownUntil.set(url.pathname, Date.now() + AI_COOLDOWN_MS);
-      else if (response.status < 500) cooldownUntil.delete(url.pathname);
-      return withBuildHeader(response);
-    }
+    // AI/STT/TTS provider shield. Repeated provider-unavailable responses back off from
+    // 5 to 60 minutes per route; R20 validation/rate limits remain active during cooldown.
+    if (AI_RUNTIME_ROUTES.has(url.pathname)) return handleAiRuntime(request, env, url.pathname);
 
     const response = await r20.fetch(request, env);
     if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) return injectHomeExperience(response);
