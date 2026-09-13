@@ -8,7 +8,7 @@
   Cross-Origin-Resource-Policy: same-origin
   Origin-Agent-Cluster: ?1
   Strict-Transport-Security: max-age=31536000
-  X-Lovely-Build: lovely-live-source-r21-ai-quota-efficiency-20260913-r21
+  X-Lovely-Build: lovely-live-source-r22-experience-hardening-20260913-r22
   Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; frame-src 'none'; worker-src 'self'; img-src 'self'; media-src 'self' blob:; style-src 'self'; style-src-attr 'none'; script-src 'self' 'sha256-WTNeKEJgfmEKZ5/HVXLCpuC/pByOTPcGaw1DkELwdes=' 'sha256-zd6du9ZixQQkVaHeSTYltUsEx5zvuDrhvmRuzWWLTog='; script-src-attr 'none'; connect-src 'self'; font-src 'self'; manifest-src 'self'; form-action 'self'; upgrade-insecure-requests
 
 /assets/*
@@ -21,6 +21,12 @@
   Cache-Control: public, max-age=31536000, immutable
 
 /assets/lovely-ai.8f169dbb9daf.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/assets/r22-experience.fd8d4e4248f3.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/assets/r22-experience.ac88ae83c6a7.css
   Cache-Control: public, max-age=31536000, immutable
 
 /robots.txt

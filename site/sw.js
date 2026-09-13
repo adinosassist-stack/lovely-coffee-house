@@ -1,6 +1,6 @@
-const SW_VERSION = '2026-09-12-r20-full-handsfree-bargein-v3';
-const STATIC_CACHE = 'lovely-static-r20-full-handsfree-bargein-v3';
-const NAV_CACHE = 'lovely-nav-r20-full-handsfree-bargein-v3';
+const SW_VERSION = '2026-09-13-r22-experience-hardening';
+const STATIC_CACHE = 'lovely-static-r22-experience-hardening';
+const NAV_CACHE = 'lovely-nav-r22-experience-hardening';
 const CACHE_PREFIXES = ['lovely-static-', 'lovely-nav-', 'lovely-pwa-'];
 const PRECACHE = [
   '/',
@@ -11,6 +11,8 @@ const PRECACHE = [
   '/assets/home-order.316103234499.js',
   '/assets/home-mobile.61eea7b2bd61.js',
   '/assets/lovely-ai.8f169dbb9daf.js',
+  '/assets/r22-experience.fd8d4e4248f3.js',
+  '/assets/r22-experience.ac88ae83c6a7.css',
   '/assets/home-faq.112eef07bd1c.js',
   '/assets/hero-coffee.webp',
   '/assets/hero-coffee-640.webp',
@@ -57,7 +59,6 @@ async function cacheFirst(request) {
   const key = canonicalCacheRequest(request);
   const cached = await cache.match(key);
   if (cached) return cached;
-  // Fetch the canonical asset URL too; never let a query-string variant populate the canonical cache key.
   const fresh = await fetch(key);
   if (fresh && fresh.ok) await cache.put(key, fresh.clone()).catch(() => {});
   return fresh;
@@ -84,7 +85,6 @@ self.addEventListener('fetch', event => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
-  // API responses are never cached by the service worker.
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(fetch(request));
     return;
@@ -100,7 +100,6 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Other same-origin static resources prefer network, with cache fallback.
   event.respondWith((async () => {
     try { return await fetch(request); }
     catch { return (await caches.match(request)) || Response.error(); }
