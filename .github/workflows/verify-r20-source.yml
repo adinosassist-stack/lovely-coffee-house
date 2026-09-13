@@ -1,4 +1,4 @@
-name: Verify sealed R21 source
+name: Verify sealed R22 source
 
 on:
   pull_request:
@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: lovely-coffee-house-r21-integrity-${{ github.ref }}
+  group: lovely-coffee-house-r22-integrity-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -21,32 +21,37 @@ jobs:
       - name: Checkout candidate
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Verify exact sealed R21 source
+      - name: Verify exact sealed R22 source
         shell: bash
         run: |
           set -euo pipefail
-          test "$(wc -l < release/r21-site.sha256)" -eq 51
-          test "$(find site -type f | wc -l)" -eq 51
-          (cd site && sha256sum -c ../release/r21-site.sha256)
+          test "$(wc -l < release/r22-site.sha256)" -eq 53
+          test "$(find site -type f | wc -l)" -eq 53
+          (cd site && sha256sum -c ../release/r22-site.sha256)
           node --input-type=module --check < site/_worker.js
           node --input-type=module --check < site/_worker-r20.js
+          node --check site/assets/r22-experience.fd8d4e4248f3.js
+          node --check site/sw.js
           printf '%s  %s\n' '5484286837bc738233aba1fb42a335a43230fde72e7fb486b4455f7496cd76c7' 'site/_worker-r20.js' | sha256sum -c -
-          grep -q "import r20 from './_worker-r20.js'" site/_worker.js
           grep -q "url.pathname === '/api/lovely-actions'" site/_worker.js
-          grep -q "envWithoutAi(env)" site/_worker.js
-          grep -q "response_format: { type: 'json_object' }" site/_worker-r20.js
-          ! grep -q "type: 'json_schema'" site/_worker-r20.js
-          grep -q 'function routeStructuredCommerce' site/assets/lovely-ai.8f169dbb9daf.js
-          grep -q 'function routeOrderCommand' site/assets/lovely-ai.8f169dbb9daf.js
-          grep -q 'LovelyOrderEngine' site/assets/lovely-ai.8f169dbb9daf.js
-          grep -q 'if(!res.ok)return null' site/assets/lovely-ai.8f169dbb9daf.js
-          grep -q 'X-Lovely-Build: lovely-live-source-r21-ai-quota-efficiency-20260913-r21' site/_headers
+          grep -q "url.pathname === '/api/lovely-events'" site/_worker.js
+          grep -q 'injectHomeExperience' site/_worker.js
+          grep -q "url.pathname==='/api/lovely-actions'" site/assets/r22-experience.fd8d4e4248f3.js
+          grep -q 'function showMeetingPlanner' site/assets/r22-experience.fd8d4e4248f3.js
+          grep -q 'function showDrinkFinder' site/assets/r22-experience.fd8d4e4248f3.js
+          grep -q 'function showRepeatOrder' site/assets/r22-experience.fd8d4e4248f3.js
+          ! grep -q 'innerHTML' site/assets/r22-experience.fd8d4e4248f3.js
+          ! grep -q 'outerHTML' site/assets/r22-experience.fd8d4e4248f3.js
+          ! grep -Eq '\beval\s*\(|new Function\s*\(' site/assets/r22-experience.fd8d4e4248f3.js
+          ! grep -qi 'gradient' site/assets/r22-experience.ac88ae83c6a7.css
+          grep -q 'X-Lovely-Build: lovely-live-source-r22-experience-hardening-20260913-r22' site/_headers
           node - <<'NODE'
           const fs = require('node:fs');
           const info = JSON.parse(fs.readFileSync('site/build-info.json','utf8'));
-          if (info.build !== 'lovely-live-source-r21-ai-quota-efficiency-20260913-r21') throw new Error(`Unexpected build ${info.build}`);
+          if (info.build !== 'lovely-live-source-r22-experience-hardening-20260913-r22') throw new Error(`Unexpected build ${info.build}`);
           if (info.ai_binding !== 'AI') throw new Error('AI binding metadata mismatch');
-          if (info.commerce_planner !== 'deterministic-client-fallback-authoritative') throw new Error('R21 commerce planner metadata mismatch');
-          if (info.rollback_artifact !== 'release/r20-site.sha256') throw new Error('R20 rollback metadata mismatch');
+          if (info.commerce_planner !== 'deterministic-client-authoritative-zero-network-first') throw new Error('R22 commerce planner metadata mismatch');
+          if (info.experience_telemetry !== 'same-origin-no-pii-allowlisted-events') throw new Error('R22 telemetry metadata mismatch');
+          if (info.rollback_artifact !== 'release/r21-site.sha256') throw new Error('R21 rollback metadata mismatch');
           console.log(`Verified ${info.build}`);
           NODE

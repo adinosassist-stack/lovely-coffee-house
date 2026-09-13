@@ -15,7 +15,7 @@ concurrency:
 env:
   CLOUDFLARE_PROJECT: lovelycoffeehouse
   WRANGLER_VERSION: 4.131.0
-  EXPECTED_BUILD: lovely-live-source-r21-ai-quota-efficiency-20260913-r21
+  EXPECTED_BUILD: lovely-live-source-r22-experience-hardening-20260913-r22
 
 jobs:
   deploy-production:
@@ -27,33 +27,51 @@ jobs:
       - name: Checkout exact production candidate
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Verify sealed R21 source
+      - name: Verify sealed R22 source
         shell: bash
         run: |
           set -euo pipefail
-          test "$(wc -l < release/r21-site.sha256)" -eq 51
-          test "$(find site -type f | wc -l)" -eq 51
-          (cd site && sha256sum -c ../release/r21-site.sha256)
+          test "$(wc -l < release/r22-site.sha256)" -eq 53
+          test "$(find site -type f | wc -l)" -eq 53
+          (cd site && sha256sum -c ../release/r22-site.sha256)
           node --input-type=module --check < site/_worker.js
           node --input-type=module --check < site/_worker-r20.js
+          node --check site/assets/r22-experience.fd8d4e4248f3.js
+          node --check site/sw.js
           printf '%s  %s\n' '5484286837bc738233aba1fb42a335a43230fde72e7fb486b4455f7496cd76c7' 'site/_worker-r20.js' | sha256sum -c -
           grep -q "import r20 from './_worker-r20.js'" site/_worker.js
           grep -q "url.pathname === '/api/lovely-actions'" site/_worker.js
+          grep -q "url.pathname === '/api/lovely-events'" site/_worker.js
+          grep -q "injectHomeExperience" site/_worker.js
           grep -q "envWithoutAi(env)" site/_worker.js
+          grep -q "R22_JS = '/assets/r22-experience.fd8d4e4248f3.js'" site/_worker.js
+          grep -q "R22_CSS = '/assets/r22-experience.ac88ae83c6a7.css'" site/_worker.js
+          grep -q "url.pathname==='/api/lovely-actions'" site/assets/r22-experience.fd8d4e4248f3.js
+          grep -q "X-Lovely-R22" site/assets/r22-experience.fd8d4e4248f3.js
+          grep -q "function showMeetingPlanner" site/assets/r22-experience.fd8d4e4248f3.js
+          grep -q "function showDrinkFinder" site/assets/r22-experience.fd8d4e4248f3.js
+          grep -q "function showRepeatOrder" site/assets/r22-experience.fd8d4e4248f3.js
+          ! grep -q 'innerHTML' site/assets/r22-experience.fd8d4e4248f3.js
+          ! grep -q 'outerHTML' site/assets/r22-experience.fd8d4e4248f3.js
+          ! grep -Eq '\beval\s*\(|new Function\s*\(' site/assets/r22-experience.fd8d4e4248f3.js
+          ! grep -qi 'gradient' site/assets/r22-experience.ac88ae83c6a7.css
           grep -q "response_format: { type: 'json_object' }" site/_worker-r20.js
           ! grep -q "type: 'json_schema'" site/_worker-r20.js
           grep -q 'function routeStructuredCommerce' site/assets/lovely-ai.8f169dbb9daf.js
           grep -q 'function routeOrderCommand' site/assets/lovely-ai.8f169dbb9daf.js
           grep -q 'LovelyOrderEngine' site/assets/lovely-ai.8f169dbb9daf.js
-          grep -q 'if(!res.ok)return null' site/assets/lovely-ai.8f169dbb9daf.js
           grep -q "X-Lovely-Build: $EXPECTED_BUILD" site/_headers
+          grep -q "r22-experience.fd8d4e4248f3.js" site/sw.js
+          grep -q "r22-experience.ac88ae83c6a7.css" site/sw.js
           BUILD="$EXPECTED_BUILD" node - <<'NODE'
           const fs = require('node:fs');
           const info = JSON.parse(fs.readFileSync('site/build-info.json','utf8'));
           if (info.build !== process.env.BUILD) throw new Error(`Unexpected build ${info.build}`);
           if (info.ai_binding !== 'AI') throw new Error('AI binding metadata mismatch');
-          if (info.commerce_planner !== 'deterministic-client-fallback-authoritative') throw new Error('R21 commerce planner metadata mismatch');
-          if (info.rollback_artifact !== 'release/r20-site.sha256') throw new Error('R20 rollback metadata mismatch');
+          if (info.commerce_planner !== 'deterministic-client-authoritative-zero-network-first') throw new Error('R22 commerce planner metadata mismatch');
+          if (info.experience_telemetry !== 'same-origin-no-pii-allowlisted-events') throw new Error('R22 telemetry metadata mismatch');
+          if (info.rollback_artifact !== 'release/r21-site.sha256') throw new Error('R21 rollback metadata mismatch');
+          if (info.deep_rollback_artifact !== 'release/r20-site.sha256') throw new Error('R20 rollback metadata mismatch');
           NODE
 
       - name: Qualify exact Cloudflare Pages project
@@ -109,7 +127,7 @@ jobs:
           grep -q '^\[ai\]$' wrangler.toml
           if grep -q '^\[env.production\]$' wrangler.toml; then grep -q '^\[env.production.ai\]$' wrangler.toml; fi
 
-      - name: Deploy R21 to Cloudflare Pages production
+      - name: Deploy R22 to Cloudflare Pages production
         id: deploy
         shell: bash
         run: |
@@ -126,20 +144,28 @@ jobs:
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.url }}
         run: |
           set -euo pipefail
-          tmp="$RUNNER_TEMP/r21-deployment"; mkdir -p "$tmp"
+          tmp="$RUNNER_TEMP/r22-deployment"; mkdir -p "$tmp"
           if curl -fsSL --retry 3 --retry-delay 2 "$DEPLOYMENT_URL/build-info.json" -o "$tmp/build-info.json"; then
-            printf '%s  %s\n' 'fd6b9793cb55fc686d656e4c17ad5c102b67924bd1f19e06dc23402150fbae05' "$tmp/build-info.json" | sha256sum -c -
+            printf '%s  %s\n' 'd56c4ffd444e00534c01d2878857d48e0ca858abb78b65da7a953e3cbf27b1fd' "$tmp/build-info.json" | sha256sum -c -
             curl -fsSL --retry 3 --retry-delay 2 "$DEPLOYMENT_URL/sw.js" -o "$tmp/sw.js"
-            printf '%s  %s\n' '4bebf51bb65ef6c6990d68b546506e923336b95a1befe1441276b3d5af025f81' "$tmp/sw.js" | sha256sum -c -
+            printf '%s  %s\n' 'ad7701dbb83f283b779205cf8ff955faa495104c830b9ed600aee00df87d215d' "$tmp/sw.js" | sha256sum -c -
           else
-            echo "::warning::Unique Pages deployment URL is not serving static files; production certification will rely on the custom domain and exact R21 hashes."
+            echo "::warning::Unique Pages deployment URL is not serving static files; production certification will rely on the custom domain and exact R22 hashes."
           fi
 
-      - name: Verify custom domain R21 end-to-end
+      - name: Verify custom domain R22 end-to-end
         shell: bash
         run: |
           set -euo pipefail
-          tmp="$RUNNER_TEMP/r21-custom"; mkdir -p "$tmp"
+          tmp="$RUNNER_TEMP/r22-custom"; mkdir -p "$tmp"
+          wait_hash() {
+            local url="$1" expected="$2" out="$3" ok=false
+            for i in {1..20}; do
+              if curl -fsSL --max-time 20 "${url}?build=${GITHUB_SHA}-${i}" -o "$out" 2>/dev/null && printf '%s  %s\n' "$expected" "$out" | sha256sum -c - >/dev/null 2>&1; then ok=true; break; fi
+              sleep 3
+            done
+            [ "$ok" = true ] || { echo "::error::Custom-domain hash did not converge for $url"; return 1; }
+          }
           wait_ai_binding() {
             local status=''
             for i in {1..20}; do
@@ -151,29 +177,42 @@ jobs:
             return 1
           }
           verify_deterministic_commerce() {
-            local ai_asset body client code out response
-            ai_asset="site/assets/lovely-ai.8f169dbb9daf.js"
-            grep -q 'function routeStructuredCommerce' "$ai_asset"
-            grep -q 'function routeOrderCommand' "$ai_asset"
-            grep -q 'LovelyOrderEngine' "$ai_asset"
-            grep -q 'if(!res.ok)return null' "$ai_asset"
+            local body client code out response
             client="githubprod${GITHUB_SHA:0:8}a${GITHUB_RUN_ATTEMPT}"
             body='{"question":"add one cappuccino","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
-            response="$RUNNER_TEMP/r21-actions.json"
+            response="$RUNNER_TEMP/r22-actions.json"
             code="$(curl -sS -o "$response" -w '%{http_code}' -H 'Origin: https://lovelycoffeehouse.com' -H 'Content-Type: application/json' -H "X-Lovely-Client: $client" --data "$body" 'https://lovelycoffeehouse.com/api/lovely-actions' 2>/dev/null || true)"
             out="$(cat "$response" 2>/dev/null || true)"
-            [ "$code" = 503 ] || { echo "::error::R21 transaction endpoint unexpectedly invoked cloud planner (HTTP $code)"; printf '%s\n' "$out"; return 1; }
-            OUT="$out" node -e "const p=JSON.parse(process.env.OUT||'{}'); process.exit(p.error==='ai_unavailable'?0:1)" 2>/dev/null || { echo '::error::Unexpected R21 transaction fallback response'; return 1; }
-            echo 'R21 deterministic commerce path verified: transaction planning spends zero Workers AI neurons'
+            [ "$code" = 503 ] || { echo "::error::R22 transaction endpoint unexpectedly invoked cloud planner (HTTP $code)"; printf '%s\n' "$out"; return 1; }
+            OUT="$out" node -e "const p=JSON.parse(process.env.OUT||'{}'); process.exit(p.error==='ai_unavailable'?0:1)" 2>/dev/null || { echo '::error::Unexpected R22 transaction fallback response'; return 1; }
           }
-          curl -fsSL --retry 10 --retry-delay 3 'https://lovelycoffeehouse.com/build-info.json' -o "$tmp/build-info.json"
-          printf '%s  %s\n' 'fd6b9793cb55fc686d656e4c17ad5c102b67924bd1f19e06dc23402150fbae05' "$tmp/build-info.json" | sha256sum -c -
-          curl -fsSL --retry 10 --retry-delay 3 'https://lovelycoffeehouse.com/robots.txt' -o "$tmp/robots.txt"
-          printf '%s  %s\n' '92eac92c256c998178345aa7f99477a2a63223c6091a840607d59e3c98fe3303' "$tmp/robots.txt" | sha256sum -c -
-          curl -fsSL --retry 10 --retry-delay 3 'https://lovelycoffeehouse.com/sw.js' -o "$tmp/sw.js"
-          printf '%s  %s\n' '4bebf51bb65ef6c6990d68b546506e923336b95a1befe1441276b3d5af025f81' "$tmp/sw.js" | sha256sum -c -
+          verify_telemetry() {
+            local out code
+            out="$RUNNER_TEMP/r22-event.json"
+            code="$(curl -sS -o "$out" -w '%{http_code}' -H 'Origin: https://lovelycoffeehouse.com' -H 'Content-Type: application/json' --data '{"event":"cart_view","page":"home","meta":{"count":1,"total":35}}' 'https://lovelycoffeehouse.com/api/lovely-events')"
+            [ "$code" = 202 ] || { echo "::error::R22 telemetry acceptance failed HTTP $code"; cat "$out"; return 1; }
+            OUT="$(cat "$out")" node -e "const p=JSON.parse(process.env.OUT||'{}');process.exit(p.accepted===true?0:1)"
+            code="$(curl -sS -o /dev/null -w '%{http_code}' -H 'Origin: https://evil.example' -H 'Content-Type: application/json' --data '{"event":"cart_view","page":"home","meta":{}}' 'https://lovelycoffeehouse.com/api/lovely-events')"
+            [ "$code" = 403 ] || { echo "::error::R22 telemetry cross-origin guard failed HTTP $code"; return 1; }
+            code="$(curl -sS -o /dev/null -w '%{http_code}' -H 'Origin: https://lovelycoffeehouse.com' -H 'Content-Type: application/json' --data '{"event":"free_form_customer_text","page":"home","meta":{}}' 'https://lovelycoffeehouse.com/api/lovely-events')"
+            [ "$code" = 400 ] || { echo "::error::R22 telemetry allowlist guard failed HTTP $code"; return 1; }
+          }
+
+          wait_hash 'https://lovelycoffeehouse.com/build-info.json' 'd56c4ffd444e00534c01d2878857d48e0ca858abb78b65da7a953e3cbf27b1fd' "$tmp/build-info.json"
+          wait_hash 'https://lovelycoffeehouse.com/robots.txt' '92eac92c256c998178345aa7f99477a2a63223c6091a840607d59e3c98fe3303' "$tmp/robots.txt"
+          wait_hash 'https://lovelycoffeehouse.com/sw.js' 'ad7701dbb83f283b779205cf8ff955faa495104c830b9ed600aee00df87d215d' "$tmp/sw.js"
+          wait_hash 'https://lovelycoffeehouse.com/assets/r22-experience.fd8d4e4248f3.js' 'fd8d4e4248f394107bba1fe6fc9e27de6ec6a77c129d1a8a02a2a9b545abee41' "$tmp/r22.js"
+          wait_hash 'https://lovelycoffeehouse.com/assets/r22-experience.ac88ae83c6a7.css' 'ac88ae83c6a713a816c5a7d8c04972d29cfc012337d1bf6f93e0847475ee5671' "$tmp/r22.css"
           wait_ai_binding
           verify_deterministic_commerce
+          verify_telemetry
+
+          home="$tmp/home.html"
+          curl -fsSL --retry 10 --retry-delay 3 "https://lovelycoffeehouse.com/?build=$GITHUB_SHA" -o "$home"
+          grep -q '/assets/r22-experience.fd8d4e4248f3.js' "$home"
+          grep -q '/assets/r22-experience.ac88ae83c6a7.css' "$home"
+          grep -q 'data-build="lovely-live-source-r22-experience-hardening-20260913-r22"' "$home"
+
           private_code="$(curl -sS -o /dev/null -w '%{http_code}' 'https://lovelycoffeehouse.com/_worker-r20.js')"
           [ "$private_code" = 404 ] || { echo "::error::Private R20 worker module is publicly reachable (HTTP $private_code)"; exit 1; }
           headers="$(curl -fsSL --dump-header - --output /dev/null --retry 10 --retry-delay 3 "https://lovelycoffeehouse.com/robots.txt?build=$GITHUB_SHA")"
@@ -185,17 +224,19 @@ jobs:
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.url }}
         run: |
           {
-            echo '### Lovely Coffee House R21 production deployment'
+            echo '### Lovely Coffee House R22 production deployment'
             echo "- Git SHA: \`$GITHUB_SHA\`"
             echo "- Build: \`$EXPECTED_BUILD\`"
             echo "- Deployment URL: $DEPLOYMENT_URL"
             echo '- Custom domain: https://lovelycoffeehouse.com'
-            echo '- Sealed source: verified (51 files)'
+            echo '- Sealed source: verified (53 files)'
             echo '- R20 rollback worker: byte-for-byte verified'
-            echo '- Custom-domain static hashes: verified'
-            echo '- Workers AI binding/status: verified'
-            echo '- Transaction planner: deterministic client fallback authoritative; zero Workers AI neurons'
+            echo '- R21 rollback manifest: retained'
+            echo '- Transaction path: deterministic and zero-network first in browser; zero Workers AI neurons'
+            echo '- Find My Drink: deterministic 3-choice recommender'
+            echo '- Meeting Planner: fixed-price cart builder + WhatsApp quote fallback'
+            echo '- Repeat order: local-device snapshot revalidated against current catalog'
+            echo '- Analytics: same-origin allowlisted no-PII funnel events'
             echo '- AI/STT/TTS circuit breaker: enabled'
-            echo '- Private rollback module: not publicly reachable'
-            echo '- Custom-domain build header: verified'
+            echo '- Custom-domain hashes, HTML injection and build header: verified'
           } >> "$GITHUB_STEP_SUMMARY"

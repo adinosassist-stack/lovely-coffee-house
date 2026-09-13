@@ -1,0 +1,25 @@
+Lovely Coffee House R22 — Experience Hardening
+
+Build: lovely-live-source-r22-experience-hardening-20260913-r22
+Sealed site: release/r22-site.sha256 (53 files)
+Rollback: R21 manifest retained; sealed R20 worker remains byte-for-byte embedded.
+
+Customer-experience changes:
+- Browser transaction planning is deterministic-first and zero-network: simple add/remove/swap/fulfilment/checkout commands no longer wait for /api/lovely-actions.
+- Find My Drink upgraded to a compact deterministic recommender using temperature, style and caffeine preference, returning a best match plus alternatives.
+- Meeting Planner upgraded to build fixed-price 6/10/20-person coffee plans, cold plans, mixed plans and current subtotals; half/full-day training remains WhatsApp-quoted.
+- Repeat Order stores only the previous product names, quantities, fulfilment and timestamp on the customer device; every repeat is revalidated against the current catalog and current prices.
+- Cart pill shows item count more clearly on mobile and remains above the mobile action bar.
+- AI status copy distinguishes instant ordering from temporarily limited cloud answers.
+
+Privacy / analytics hardening:
+- New /api/lovely-events endpoint is same-origin only and accepts a strict event allowlist plus bounded scalar metadata.
+- No customer message text, name, email, phone number, address or client identifier is accepted by the telemetry schema.
+- Event body is capped at 4096 bytes and rate-limited per Cloudflare source IP.
+- Cross-origin and unrecognized event requests fail closed.
+
+Security / release gates:
+- R22 client uses DOM creation/textContent only; no innerHTML, outerHTML, eval or dynamic Function construction.
+- No gradients introduced.
+- Existing CSP, same-origin API protections, R20 emergency/health safeguards, cart limits, delivery minimums and WhatsApp final-confirmation rules are preserved.
+- Production certification verifies exact hashes, R22 home injection, telemetry guards, deterministic commerce, AI binding, private R20 module protection and X-Lovely-Build.
