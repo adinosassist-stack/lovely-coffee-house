@@ -118,3 +118,15 @@ jobs:
           probe status "$base/api/lovely-status"
           probe status_origin "$base/api/lovely-status" -H 'Origin: https://lovelycoffeehouse.com' -H 'Sec-Fetch-Site: same-origin' -H 'Sec-Fetch-Mode: cors' -H 'User-Agent: Mozilla/5.0'
           probe planner_options "$base/api/lovely-actions" -X OPTIONS -H 'Origin: https://lovelycoffeehouse.com' -H 'Access-Control-Request-Method: POST' -H 'Sec-Fetch-Site: same-origin' -H 'User-Agent: Mozilla/5.0'
+
+          planner='{"question":"add one cappuccino","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
+          probe planner_post "$base/api/lovely-actions" \
+            -H 'Origin: https://lovelycoffeehouse.com' \
+            -H 'Sec-Fetch-Site: same-origin' \
+            -H 'Sec-Fetch-Mode: cors' \
+            -H 'Content-Type: application/json' \
+            -H 'X-Lovely-Client: githubdiagpost20260913' \
+            -H 'User-Agent: Mozilla/5.0' \
+            --data "$planner"
+          printf 'planner_post_body='; head -c 1000 "$RUNNER_TEMP/planner_post.body" | tr '\r\n' ' '; echo
+          printf 'status_body='; head -c 500 "$RUNNER_TEMP/status.body" | tr '\r\n' ' '; echo
