@@ -1,7 +1,7 @@
-// Lovely Coffee House R22 - runtime shield hardening
-// Preserves the sealed R20 worker and R21/R22 zero-neuron commerce architecture.
-// Adds strict browser provenance, early body-size guards, adaptive AI provider backoff,
-// hardened telemetry, and explicit runtime state headers without changing customer UX.
+// Lovely Coffee House R22 - experience hardening wrapper
+// Preserves the sealed R20 worker and R21 zero-neuron commerce architecture.
+// Adds a same-origin, no-PII experience telemetry endpoint and injects the
+// sealed R22 client experience layer into the home page response.
 
 import r20 from './_worker-r20.js';
 
@@ -21,20 +21,20 @@ const STRICT_API_ROUTES = new Set([
   '/api/lovely-stt',
   '/api/lovely-events',
 ]);
-const ROUTE_BODY_LIMITS = new Map([
+const BODY_LIMITS = new Map([
   ['/api/lovely-ai', 64 * 1024],
   ['/api/lovely-actions', 64 * 1024],
   ['/api/lovely-tts', 16 * 1024],
   ['/api/lovely-stt', 5 * 1024 * 1024],
   ['/api/lovely-events', 4096],
 ]);
-const AI_BACKOFF_MS = [5, 15, 30, 60].map((minutes) => minutes * 60 * 1000);
+const AI_BACKOFF_MS = [5, 15, 30, 60].map(minutes => minutes * 60 * 1000);
 const TELEMETRY_EVENTS = new Set([
   'ai_open','commerce_local_route','drink_finder_open','drink_recommend',
   'meeting_planner_open','meeting_plan','meeting_plan_add','cart_view',
   'whatsapp_checkout','repeat_order_shown','repeat_order_add',
 ]);
-const aiFailures = new Map();
+const runtimeBackoff = new Map();
 const telemetryBuckets = new Map();
 const TELEMETRY_WINDOW_MS = 5 * 60 * 1000;
 const TELEMETRY_LIMIT = 60;
@@ -44,22 +44,23 @@ function envWithoutAi(env) {
   return { ...env, AI: null };
 }
 
-function hardenedHeaders(headers, aiState = null) {
-  const out = new Headers(headers);
-  out.set('X-Lovely-Build', BUILD_ID);
-  out.set('X-Lovely-Hardening', HARDENING_ID);
-  if (aiState) out.set('X-Lovely-AI-State', aiState);
-  return out;
-}
-
-function withBuildHeader(response, aiState = null, extra = {}) {
-  const headers = hardenedHeaders(response.headers, aiState);
-  for (const [key, value] of Object.entries(extra)) headers.set(key, String(value));
+function withHardeningHeaders(response, extra = {}) {
+  const headers = new Headers(response.headers);
+  headers.set('X-Lovely-Build', BUILD_ID);
+  headers.set('X-Lovely-Hardening', HARDENING_ID);
+  for (const [key, value] of Object.entries(extra)) {
+    if (value == null) headers.delete(key);
+    else headers.set(key, String(value));
+  }
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
     headers,
   });
+}
+
+function withBuildHeader(response) {
+  return withHardeningHeaders(response);
 }
 
 function apiHeaders(extra = {}) {
@@ -98,39 +99,33 @@ async function responseIsAiUnavailable(response) {
   }
 }
 
-function exactOrigin(request) {
-  try { return new URL(request.url).origin; } catch { return ''; }
-}
-
-function sameOriginRequest(request) {
-  const requestOrigin = exactOrigin(request);
-  if (!requestOrigin) return false;
-  const origin = request.headers.get('Origin');
-  if (origin && origin !== requestOrigin) return false;
-  const fetchSite = String(request.headers.get('Sec-Fetch-Site') || '').toLowerCase();
-  return fetchSite !== 'cross-site';
-}
-
-function trustedBrowserProvenance(request) {
-  if (request.method === 'OPTIONS') return true;
-  const requestOrigin = exactOrigin(request);
-  if (!requestOrigin) return false;
+function strictSameOriginRequest(request) {
+  let requestOrigin = '';
+  try { requestOrigin = new URL(request.url).origin; } catch { return false; }
   const origin = request.headers.get('Origin');
   if (origin) return origin === requestOrigin;
   const fetchSite = String(request.headers.get('Sec-Fetch-Site') || '').toLowerCase();
   return fetchSite === 'same-origin' || fetchSite === 'none';
 }
 
-function earlyBodyGuard(request, pathname) {
-  const limit = ROUTE_BODY_LIMITS.get(pathname);
-  if (!limit || request.method === 'GET' || request.method === 'HEAD' || request.method === 'OPTIONS') return null;
+function sameOriginRequest(request) {
+  let requestOrigin = '';
+  try { requestOrigin = new URL(request.url).origin; } catch { return false; }
+  const origin = request.headers.get('Origin');
+  if (origin && origin !== requestOrigin) return false;
+  const fetchSite = String(request.headers.get('Sec-Fetch-Site') || '').toLowerCase();
+  return fetchSite !== 'cross-site';
+}
+
+function requestBodyWithinDeclaredLimit(request, pathname) {
+  const max = BODY_LIMITS.get(pathname);
+  if (!max || request.method === 'GET' || request.method === 'HEAD' || request.method === 'OPTIONS') return { ok: true };
   const raw = request.headers.get('Content-Length');
-  if (!raw) return null;
-  if (!/^\d+$/.test(raw)) return apiJson({ error: 'invalid_content_length' }, 400);
+  if (raw == null || raw === '') return { ok: true };
   const length = Number(raw);
-  if (!Number.isSafeInteger(length) || length < 0) return apiJson({ error: 'invalid_content_length' }, 400);
-  if (length > limit) return apiJson({ error: 'body_too_large' }, 413);
-  return null;
+  if (!Number.isFinite(length) || length < 0) return { ok: false, status: 400, error: 'invalid_content_length' };
+  if (length > max) return { ok: false, status: 413, error: 'body_too_large' };
+  return { ok: true };
 }
 
 function telemetryRateLimit(request) {
@@ -171,7 +166,7 @@ function sanitizeTelemetryMeta(raw) {
 
 async function handleTelemetry(request) {
   if (request.method !== 'POST') return apiJson({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
-  if (!sameOriginRequest(request)) return apiJson({ error: 'cross_origin_forbidden' }, 403);
+  if (!strictSameOriginRequest(request)) return apiJson({ error: 'cross_origin_forbidden' }, 403);
   if (!telemetryRateLimit(request)) return apiJson({ error: 'rate_limited' }, 429, { 'Retry-After': '300' });
   const type = String(request.headers.get('Content-Type') || '').toLowerCase();
   if (!type.startsWith('application/json')) return apiJson({ error: 'content_type_must_be_json' }, 415);
@@ -192,45 +187,28 @@ async function handleTelemetry(request) {
   return apiJson({ accepted: true }, 202);
 }
 
-function currentAiFailure(pathname) {
-  const record = aiFailures.get(pathname);
-  if (!record) return null;
-  if (record.until <= Date.now()) return { ...record, cooling: false };
-  return { ...record, cooling: true };
+function currentBackoff(pathname) {
+  const state = runtimeBackoff.get(pathname);
+  if (!state) return null;
+  if (state.until <= Date.now()) return state;
+  return state;
 }
 
-function noteAiFailure(pathname) {
-  const previous = aiFailures.get(pathname);
+function noteRuntimeFailure(pathname) {
+  const previous = runtimeBackoff.get(pathname);
   const failures = Math.min((previous?.failures || 0) + 1, AI_BACKOFF_MS.length);
-  const delay = AI_BACKOFF_MS[failures - 1];
-  const record = { failures, until: Date.now() + delay };
-  aiFailures.set(pathname, record);
-  return record;
+  const duration = AI_BACKOFF_MS[Math.min(failures - 1, AI_BACKOFF_MS.length - 1)];
+  const state = { failures, until: Date.now() + duration };
+  runtimeBackoff.set(pathname, state);
+  return state;
 }
 
-function clearAiFailure(pathname) {
-  aiFailures.delete(pathname);
+function clearRuntimeFailure(pathname) {
+  runtimeBackoff.delete(pathname);
 }
 
-async function handleAiRuntime(request, env, pathname) {
-  const failure = currentAiFailure(pathname);
-  if (failure?.cooling) {
-    const retry = Math.max(1, Math.ceil((failure.until - Date.now()) / 1000));
-    return withBuildHeader(await r20.fetch(request, envWithoutAi(env)), 'cooldown', { 'Retry-After': retry });
-  }
-
-  const response = await r20.fetch(request, env);
-  if (await responseIsAiUnavailable(response)) {
-    const record = noteAiFailure(pathname);
-    const retry = Math.max(1, Math.ceil((record.until - Date.now()) / 1000));
-    return withBuildHeader(response, 'unavailable', { 'Retry-After': retry });
-  }
-  if (response.status >= 200 && response.status < 300) {
-    clearAiFailure(pathname);
-    return withBuildHeader(response, 'ready');
-  }
-  if (response.status >= 400 && response.status < 500) return withBuildHeader(response, 'rejected');
-  return withBuildHeader(response, 'error');
+function retryAfterSeconds(state) {
+  return Math.max(1, Math.ceil((state.until - Date.now()) / 1000));
 }
 
 async function injectHomeExperience(response) {
@@ -240,7 +218,9 @@ async function injectHomeExperience(response) {
   if (!html.includes(R22_CSS)) html = html.replace('</head>', `<link href="${R22_CSS}" rel="stylesheet"/></head>`);
   if (!html.includes(R22_JS)) html = html.replace('</body>', `<script defer src="${R22_JS}"></script></body>`);
   html = html.replace(/<body\s+data-build="[^"]*"/i, `<body data-build="${BUILD_ID}"`);
-  const headers = hardenedHeaders(response.headers);
+  const headers = new Headers(response.headers);
+  headers.set('X-Lovely-Build', BUILD_ID);
+  headers.set('X-Lovely-Hardening', HARDENING_ID);
   headers.set('Cache-Control', 'no-cache');
   headers.delete('Content-Length');
   headers.delete('ETag');
@@ -254,16 +234,15 @@ export default {
     // Deploy-time rollback code is never exposed as a static asset.
     if (url.pathname === '/_worker-r20.js') return sealedPrivate404(request, env);
 
-    // Paid/state-changing browser API routes require provenance. This blocks direct scripted
-    // anonymous calls that omit both Origin and Fetch Metadata while preserving normal browser use.
-    if (STRICT_API_ROUTES.has(url.pathname) && !trustedBrowserProvenance(request)) {
-      return apiJson({ error: 'request_provenance_required' }, 403, { 'X-Lovely-AI-State': 'rejected' });
+    // Fail closed for browser/API provenance on all state-changing or paid-provider routes.
+    // This rejects anonymous curl/bot traffic that omits both Origin and Fetch Metadata while
+    // preserving normal same-origin browser requests and explicit production probes.
+    if (STRICT_API_ROUTES.has(url.pathname) && request.method !== 'OPTIONS' && !strictSameOriginRequest(request)) {
+      return apiJson({ error: 'cross_origin_forbidden' }, 403);
     }
 
-    // Reject declared oversized bodies before they reach the sealed worker/provider. The R20
-    // streaming reader remains the authoritative fallback for chunked or missing lengths.
-    const earlyBodyError = earlyBodyGuard(request, url.pathname);
-    if (earlyBodyError) return earlyBodyError;
+    const declaredBody = requestBodyWithinDeclaredLimit(request, url.pathname);
+    if (!declaredBody.ok) return apiJson({ error: declaredBody.error }, declaredBody.status);
 
     // Privacy-minimal first-party funnel events. No free-form customer text or identifiers
     // are accepted; only a strict event allowlist and bounded scalar metadata are logged.
@@ -272,12 +251,48 @@ export default {
     // Never spend Workers AI neurons on transaction planning. The sealed deterministic
     // client order engine remains authoritative for add/remove/swap/fulfilment/checkout.
     if (url.pathname === '/api/lovely-actions') {
-      return withBuildHeader(await r20.fetch(request, envWithoutAi(env)), 'commerce-local');
+      return withHardeningHeaders(await r20.fetch(request, envWithoutAi(env)), {
+        'X-Lovely-AI-State': 'commerce-local',
+      });
     }
 
-    // AI/STT/TTS provider shield. Repeated provider-unavailable responses back off from
-    // 5 to 60 minutes per route; R20 validation/rate limits remain active during cooldown.
-    if (AI_RUNTIME_ROUTES.has(url.pathname)) return handleAiRuntime(request, env, url.pathname);
+    // AI/STT/TTS provider shield. Provider failures use adaptive backoff (5m, 15m, 30m,
+    // then 60m) to avoid repeated paid-provider/quota probes while preserving automatic
+    // recovery. The sealed R20 validators/rate limits still run on every cooldown request.
+    if (AI_RUNTIME_ROUTES.has(url.pathname)) {
+      const state = currentBackoff(url.pathname);
+      if (state?.until > Date.now()) {
+        const response = await r20.fetch(request, envWithoutAi(env));
+        return withHardeningHeaders(response, {
+          'Retry-After': retryAfterSeconds(state),
+          'X-Lovely-AI-State': 'cooldown',
+        });
+      }
+
+      const response = await r20.fetch(request, env);
+      if (await responseIsAiUnavailable(response)) {
+        const next = noteRuntimeFailure(url.pathname);
+        return withHardeningHeaders(response, {
+          'Retry-After': retryAfterSeconds(next),
+          'X-Lovely-AI-State': 'unavailable',
+        });
+      }
+
+      if (response.status === 200) {
+        clearRuntimeFailure(url.pathname);
+        return withHardeningHeaders(response, {
+          'X-Lovely-AI-State': 'ready',
+        });
+      }
+      if (response.status < 500) {
+        return withHardeningHeaders(response, {
+          'X-Lovely-AI-State': 'rejected',
+        });
+      }
+      return withHardeningHeaders(response, {
+        'X-Lovely-AI-State': 'error',
+      });
+    }
 
     const response = await r20.fetch(request, env);
     if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) return injectHomeExperience(response);
