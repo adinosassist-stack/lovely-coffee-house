@@ -28,7 +28,7 @@ const BODY_LIMITS = new Map([
   ['/api/lovely-stt', 5 * 1024 * 1024],
   ['/api/lovely-events', 4096],
 ]);
-const AI_BACKOFF_MS = [5, 15, 30, 60].map(minutes => minutes * 60 * 1000);
+const AI_BACKOFF_MS = [1, 3, 10, 20].map(minutes => minutes * 60 * 1000);
 const TELEMETRY_EVENTS = new Set([
   'ai_open','commerce_local_route','drink_finder_open','drink_recommend',
   'meeting_planner_open','meeting_plan','meeting_plan_add','cart_view',
@@ -256,8 +256,8 @@ export default {
       });
     }
 
-    // AI/STT/TTS provider shield. Provider failures use adaptive backoff (5m, 15m, 30m,
-    // then 60m) to avoid repeated paid-provider/quota probes while preserving automatic
+    // AI/STT/TTS provider shield. Provider failures use adaptive backoff (1m, 3m, 10m,
+    // then 20m) to avoid repeated paid-provider/quota probes while preserving automatic
     // recovery. The sealed R20 validators/rate limits still run on every cooldown request.
     if (AI_RUNTIME_ROUTES.has(url.pathname)) {
       const state = currentBackoff(url.pathname);
