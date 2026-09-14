@@ -195,13 +195,28 @@ jobs:
             local status=''
             for i in {1..20}; do
               status="$(curl -fsS 'https://lovelycoffeehouse.com/api/lovely-status' 2>/dev/null || true)"
-              if STATUS="$status" node -e "const p=JSON.parse(process.env.STATUS||'{}'); process.exit(p.ai===true&&['unchecked','degraded'].includes(p.runtime)?0:1)" 2>/dev/null; then
+              if STATUS="$status" node -e "const p=JSON.parse(process.env.STATUS||'{}'); process.exit(p.ai===true&&p.runtime==='unchecked'?0:1)" 2>/dev/null; then
                 return 0
               fi
               sleep 3
             done
-            echo '::error::Custom-domain Workers AI binding/status did not become ready'
+            echo '::error::Custom-domain Workers AI binding/status was not clean'
             return 1
+          }
+
+          verify_ai_concierge() {
+            local body client code out response headers
+            client="githubai${GITHUB_SHA:0:8}a${GITHUB_RUN_ATTEMPT}"
+            body='{"question":"What is the price of a cappuccino?","history":[],"context":"coffee","mode":"text","state":{"order":[],"orderTotal":0,"fulfilment":null,"lastProduct":null,"flow":null,"flowStep":null,"hydrationReminder":null}}'
+            response="$tmp/r23-ai.json"
+            headers="$tmp/r23-ai.headers"
+            code="$(curl -sS -D "$headers" -o "$response" -w '%{http_code}' -H 'Origin: https://lovelycoffeehouse.com' -H 'Sec-Fetch-Site: same-origin' -H 'Content-Type: application/json' -H "X-Lovely-Client: $client" --data "$body" 'https://lovelycoffeehouse.com/api/lovely-ai' 2>/dev/null || true)"
+            out="$(cat "$response" 2>/dev/null || true)"
+            [ "$code" = 200 ] || { echo "::error::Lovely AI concierge smoke test failed HTTP $code"; printf '%s\n' "$out"; return 1; }
+            OUT="$out" node -e "const p=JSON.parse(process.env.OUT||'{}'); const a=String(p.answer||''); process.exit(/cappuccino/i.test(a)&&/P\s*35\b/i.test(a)?0:1)" 2>/dev/null || { echo '::error::Lovely AI concierge answer was not grounded to Cappuccino P35'; printf '%s\n' "$out"; return 1; }
+            tr -d '\r' < "$headers" > "$headers.clean"
+            grep -qi "^x-lovely-hardening: $EXPECTED_HARDENING$" "$headers.clean" || { echo '::error::Lovely AI hardening header mismatch'; return 1; }
+            grep -qi '^x-lovely-ai-state: ready$' "$headers.clean" || { echo '::error::Lovely AI did not report ready state'; return 1; }
           }
 
           verify_provenance_shield() {
@@ -265,6 +280,7 @@ jobs:
           wait_hash 'https://lovelycoffeehouse.com/assets/r22-experience.fd8d4e4248f3.js' 'fd8d4e4248f394107bba1fe6fc9e27de6ec6a77c129d1a8a02a2a9b545abee41' "$tmp/r22.js"
           wait_hash 'https://lovelycoffeehouse.com/assets/r22-experience.ac88ae83c6a7.css' 'ac88ae83c6a713a816c5a7d8c04972d29cfc012337d1bf6f93e0847475ee5671' "$tmp/r22.css"
           wait_ai_binding
+          verify_ai_concierge
           verify_provenance_shield
           verify_cross_origin_shield
           verify_deterministic_commerce
@@ -306,6 +322,7 @@ jobs:
             echo '- R21/R20 emergency rollback line: retained and independently verified'
             echo '- Transaction path: deterministic and zero-network first in browser; zero Workers AI neurons'
             echo '- Browser provenance + cross-origin API shield: verified'
+            echo '- Lovely AI concierge: live same-origin grounded-answer smoke test passed'
             echo '- Runtime hardening + commerce AI-state headers: verified'
             echo '- Telemetry allowlist + size guard: verified'
             echo '- Find My Drink: deterministic 3-choice recommender'
