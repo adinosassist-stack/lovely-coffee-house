@@ -40,12 +40,14 @@ jobs:
           node --check site/assets/r22-experience.fd8d4e4248f3.js
           node --check site/sw.js
           printf '%s  %s\n' '5484286837bc738233aba1fb42a335a43230fde72e7fb486b4455f7496cd76c7' 'site/_worker-r20.js' | sha256sum -c -
-          printf '%s  %s\n' '5d59f7f5743a37ae63b6d9fafd324cc51d3a15c5a8adfeb36b7f143752af70d7' 'site/_worker.js' | sha256sum -c -
+          printf '%s  %s\n' '69d3a8702135e5d6e535173b3c756becbce4f5a2d52ae9f8a6805590a6a7f588' 'site/_worker.js' | sha256sum -c -
 
           grep -q "import r20 from './_worker-r20.js'" site/_worker.js
           grep -q "HARDENING_ID = '$EXPECTED_HARDENING'" site/_worker.js
           grep -q 'strictSameOriginRequest' site/_worker.js
           grep -q 'AI_BACKOFF_MS' site/_worker.js
+          grep -q 'runtimeHealth' site/_worker.js
+          grep -q 'WRAPPER_EMERGENCY_RE' site/_worker.js
           grep -q "'X-Lovely-Hardening'" site/_worker.js
           grep -q "'X-Lovely-AI-State'" site/_worker.js
           grep -q 'TELEMETRY_LIMIT = 60' site/_worker.js
@@ -193,7 +195,7 @@ jobs:
             local status=''
             for i in {1..20}; do
               status="$(curl -fsS 'https://lovelycoffeehouse.com/api/lovely-status' 2>/dev/null || true)"
-              if STATUS="$status" node -e "const p=JSON.parse(process.env.STATUS||'{}'); process.exit(p.ai===true&&p.runtime==='unchecked'?0:1)" 2>/dev/null; then
+              if STATUS="$status" node -e "const p=JSON.parse(process.env.STATUS||'{}'); process.exit(p.ai===true&&['unchecked','degraded'].includes(p.runtime)?0:1)" 2>/dev/null; then
                 return 0
               fi
               sleep 3
