@@ -40,7 +40,7 @@ jobs:
           node --check site/assets/r22-experience.fd8d4e4248f3.js
           node --check site/sw.js
           printf '%s  %s\n' '5484286837bc738233aba1fb42a335a43230fde72e7fb486b4455f7496cd76c7' 'site/_worker-r20.js' | sha256sum -c -
-          printf '%s  %s\n' 'ac5d85b4b4247f037637846035c6b6c5326b8b5b1822138fada42959abc8e64f' 'site/_worker.js' | sha256sum -c -
+          printf '%s  %s\n' '5d59f7f5743a37ae63b6d9fafd324cc51d3a15c5a8adfeb36b7f143752af70d7' 'site/_worker.js' | sha256sum -c -
 
           grep -q "import r20 from './_worker-r20.js'" site/_worker.js
           grep -q "HARDENING_ID = '$EXPECTED_HARDENING'" site/_worker.js
