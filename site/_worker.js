@@ -211,6 +211,42 @@ function retryAfterSeconds(state) {
   return Math.max(1, Math.ceil((state.until - Date.now()) / 1000));
 }
 
+function runtimeHealth() {
+  const now = Date.now();
+  for (const route of AI_RUNTIME_ROUTES) {
+    const state = runtimeBackoff.get(route);
+    if (state?.until > now) return 'degraded';
+  }
+  return 'unchecked';
+}
+
+const WRAPPER_EMERGENCY_ANSWER = 'That could be an emergency. Please seek urgent in-person medical care or contact your local emergency service now. Do not rely on a café chatbot for severe or rapidly dangerous symptoms, a severe allergic reaction, suspected stroke, overdose, or immediate risk of self-harm.';
+const WRAPPER_EMERGENCY_RE = /\b(?:heart attack|cardiac arrest|stroke|chest pain|pressure in (?:my|the) chest|can(?:not|'t) breathe|not breathing|trouble breathing|difficulty breathing|severe shortness of breath|choking|anaphyla|severe allergic|my throat is closing|throat closing|swollen (?:tongue|throat)|asthma attack|severe asthma|i(?:'m| am) collapsing|collapse|collapsing|fainting and not waking|not waking up|face droop|facial droop|one[- ]sided weakness|slurred speech|unconscious|passed out|seizure|severe bleeding|coughing blood|vomiting blood|overdose|poison(?:ed|ing)|swallowed poison|severe burns?|electric shock|electrocution|suicid(?:e|al)|kill myself|hurt myself|self[- ]harm|want to die|end my life|do not want to live|don't want to live|better off dead)\b/i;
+
+function normalizeEmergencyText(text) {
+  return String(text || '')
+    .normalize('NFKD')
+    .replace(/[’‘`]/g, "'")
+    .replace(/[\u2010-\u2015_-]+/g, ' ')
+    .replace(/[^a-z0-9' ]+/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function localEmergencyResponse(request) {
+  if (request.method !== 'POST') return null;
+  const type = String(request.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase();
+  if (type !== 'application/json') return null;
+  try {
+    const body = await request.clone().json();
+    const question = typeof body?.question === 'string' ? normalizeEmergencyText(body.question).slice(0, 500) : '';
+    if (!question || !WRAPPER_EMERGENCY_RE.test(question)) return null;
+    return apiJson({ answer: WRAPPER_EMERGENCY_ANSWER }, 200, { 'X-Lovely-AI-State': 'safety-local' });
+  } catch {
+    return null;
+  }
+}
+
 async function injectHomeExperience(response) {
   const type = String(response.headers.get('Content-Type') || '').toLowerCase();
   if (response.status !== 200 || !type.includes('text/html')) return withBuildHeader(response);
@@ -247,6 +283,27 @@ export default {
     // Privacy-minimal first-party funnel events. No free-form customer text or identifiers
     // are accepted; only a strict event allowlist and bounded scalar metadata are logged.
     if (url.pathname === '/api/lovely-events') return handleTelemetry(request);
+
+    // Expose provider health without spending Workers AI neurons. The binding status remains
+    // authoritative for configuration, while runtime reflects active provider cooldowns.
+    if (url.pathname === '/api/lovely-status' && request.method === 'GET') {
+      const response = await r20.fetch(request, env);
+      try {
+        const body = await response.clone().json();
+        return apiJson({ ...body, runtime: runtimeHealth() }, response.status, {
+          'X-Lovely-AI-State': runtimeHealth() === 'degraded' ? 'degraded' : 'unchecked',
+        });
+      } catch {
+        return withBuildHeader(response);
+      }
+    }
+
+    // Broader deterministic emergency interception before any paid AI call. This extends the
+    // sealed R20 safety vocabulary and remains zero-neuron.
+    if (url.pathname === '/api/lovely-ai') {
+      const emergency = await localEmergencyResponse(request);
+      if (emergency) return emergency;
+    }
 
     // Never spend Workers AI neurons on transaction planning. The sealed deterministic
     // client order engine remains authoritative for add/remove/swap/fulfilment/checkout.
